@@ -1,0 +1,13 @@
+.git
+node_modules
+dist
+.server-build
+
+data
+*.log
+tmp-*.json
+
+.env
+.env.*
+cloudflared.exe
+GoogleCloudSDKInstaller.exe

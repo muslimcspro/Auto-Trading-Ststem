@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.server-build/
+
+data/
+*.log
+tmp-*.json
+
+.env
+.env.*
+start-system.bat
+
+cloudflared.exe
+GoogleCloudSDKInstaller.exe
