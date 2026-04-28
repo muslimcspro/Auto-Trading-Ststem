@@ -1926,10 +1926,10 @@ function buildSignalCloseNotificationPayload(signal: TradeSignal, closeText?: st
   const closePrice = signal.closePrice ?? (signal.status === 'LOSS' ? signal.stopLoss : signal.takeProfit);
   const pnl = percent(signal.entry, closePrice, signal.side);
   const venue = signal.market === 'futures' ? `FUTURES x${Math.max(1, signal.executionLeverage ?? liveExecutionRules.futuresLeverage)}` : 'SPOT';
-  const netPnl = calculateGeneralNetPnl(signal);
+  const netPnl = calculate24hNetPnl(signal);
   return {
     title: `Signal Closed ${formatTradeIdLabel(signal.id)}`,
-    message: `${venue} | ${signal.symbol} ${signal.side} | Direction ${closeText ?? (level === 'loss' ? 'Stop Loss' : 'Take Profit')} | Closed price ${formatDisplayNumber(closePrice)} | TP ${signal.expectedProfitPct.toFixed(2)}% | SL -${signal.riskPct.toFixed(2)}% | Duration ${formatTradeDuration(signal.openedAt, signal.closedAt)} | PnL ${pnl.toFixed(2)}% | Net PnL ${netPnl.toFixed(2)}%${includeUsdtPnl && signal.executionMode === 'live' && signal.binanceRealizedPnlUsdt != null ? ` | PnL USDT ${formatUsdt(signal.binanceRealizedPnlUsdt)}` : ''}`,
+    message: `${venue} | ${signal.symbol} ${signal.side} | Direction ${closeText ?? (level === 'loss' ? 'Stop Loss' : 'Take Profit')} | Closed price ${formatDisplayNumber(closePrice)} | TP ${signal.expectedProfitPct.toFixed(2)}% | SL -${signal.riskPct.toFixed(2)}% | Duration ${formatTradeDuration(signal.openedAt, signal.closedAt)} | PnL ${pnl.toFixed(2)}% | 24h Net PnL ${netPnl.toFixed(2)}%${includeUsdtPnl && signal.executionMode === 'live' && signal.binanceRealizedPnlUsdt != null ? ` | PnL USDT ${formatUsdt(signal.binanceRealizedPnlUsdt)}` : ''}`,
     level
   };
 }
@@ -2562,7 +2562,11 @@ function parseTelegramCardData(title: string, message: string, level: 'info' | '
     stopLossPct: chunks.find(part => part.startsWith('SL '))?.replace('SL ', ''),
     pnl: formatPercent(chunks.find(part => part.startsWith('PnL '))?.replace('PnL ', '')),
     pnlUsdt: chunks.find(part => part.startsWith('PnL USDT '))?.replace('PnL USDT ', ''),
-    netPnl: formatPercent(chunks.find(part => part.startsWith('Net PnL '))?.replace('Net PnL ', '') ?? lookupGeneralNetPnlLabel(tradeId)),
+    netPnl: formatPercent(
+      chunks.find(part => part.startsWith('24h Net PnL '))?.replace('24h Net PnL ', '')
+        ?? chunks.find(part => part.startsWith('Net PnL '))?.replace('Net PnL ', '')
+        ?? lookup24hNetPnlLabel(tradeId)
+    ),
     priceLabel: closedPrice ? 'Closed price' : 'Entry price',
     priceValue: closedPrice ?? entryPrice ?? '--',
     strategy: '',
@@ -2591,7 +2595,7 @@ function formatTelegramCaption(card: TelegramCardData) {
     `🛑 <b>SL:</b> ${escapeHtml(card.stopLossPct ?? '--')}`,
     `⏱️ <b>Duration:</b> ${escapeHtml(card.duration)}`,
     card.pnlUsdt ? `💰 <b>PnL:</b> ${escapeHtml(card.pnlUsdt)}` : card.pnl ? `📈 <b>PnL:</b> ${escapeHtml(card.pnl)}` : '',
-    card.netPnl ? `📊 <b>Net PnL:</b> ${escapeHtml(card.netPnl)}` : '',
+    card.netPnl ? `📊 <b>24h Net PnL:</b> ${escapeHtml(card.netPnl)}` : '',
     '',
     ...(channelLine ? [channelLine, ''] : []),
     `✨ <b>Auto Trading System By Muslim Alramadhan</b> ✨`
@@ -2726,15 +2730,13 @@ async function generateTelegramCard(card: TelegramCardData, level: 'info' | 'win
       <rect x="0" y="0" width="1088" height="72" rx="18" fill="#0D141C" stroke="#263241" stroke-width="2"/>
       <text x="34" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Coin</text>
       <text x="34" y="58" font-size="24" font-weight="950" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(card.symbol)}</text>
-      <text x="236" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Market</text>
-      <text x="236" y="58" font-size="24" font-weight="950" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(card.marketLabel)}</text>
-      <text x="448" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Side</text>
-      <text x="448" y="58" font-size="24" font-weight="950" fill="${sideAccent}" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(card.side)}</text>
-      <text x="612" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Status</text>
-      <text x="612" y="58" font-size="24" font-weight="950" fill="${resultAccent}" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(statusText)}</text>
-      <text x="782" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">${usdtText ? 'USDT PnL' : 'Percent PnL'}</text>
-      <text x="782" y="58" font-size="24" font-weight="950" fill="${resultAccent}" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(usdtText ?? pnlText)}</text>
-      <text x="974" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Net PnL</text>
+      <text x="289" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Market</text>
+      <text x="289" y="58" font-size="24" font-weight="950" fill="#FFFFFF" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(card.marketLabel)}</text>
+      <text x="544" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Side</text>
+      <text x="544" y="58" font-size="24" font-weight="950" fill="${sideAccent}" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(card.side)}</text>
+      <text x="799" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">Status</text>
+      <text x="799" y="58" font-size="24" font-weight="950" fill="${resultAccent}" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(statusText)}</text>
+      <text x="974" y="31" font-size="18" font-weight="900" fill="#8EA0B5" font-family="Segoe UI, Arial, sans-serif">24h Net PnL</text>
       <text x="974" y="58" font-size="24" font-weight="950" fill="${netPnlText.startsWith('-') ? '#FF365C' : '#00D18F'}" font-family="Segoe UI, Arial, sans-serif">${escapeSvg(netPnlText)}</text>
     </g>
 
@@ -3652,18 +3654,25 @@ function signalNetPnl(signal: TradeSignal) {
   return signal.status === 'OPEN' ? openSignalPnl(signal) : closedSignalPnl(signal);
 }
 
-function calculateGeneralNetPnl(currentSignal?: TradeSignal) {
+function getSignalNetPnlTimestamp(signal: TradeSignal) {
+  return signal.status === 'OPEN' ? signal.openedAt : signal.closedAt ?? signal.openedAt;
+}
+
+function calculate24hNetPnl(currentSignal?: TradeSignal) {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const byId = new Map<number, TradeSignal>();
   for (const signal of signals) byId.set(signal.id, signal);
   if (currentSignal) byId.set(currentSignal.id, currentSignal);
-  return [...byId.values()].reduce((sum, signal) => sum + signalNetPnl(signal), 0);
+  return [...byId.values()]
+    .filter(signal => getSignalNetPnlTimestamp(signal) >= cutoff)
+    .reduce((sum, signal) => sum + signalNetPnl(signal), 0);
 }
 
-function lookupGeneralNetPnlLabel(idLabel: string) {
+function lookup24hNetPnlLabel(idLabel: string) {
   const normalized = idLabel.trim().toUpperCase();
   const currentSignal = signals.find(signal => formatTradeIdLabel(signal.id).toUpperCase() === normalized);
   if (!currentSignal && normalized === '#--') return undefined;
-  const netPnl = calculateGeneralNetPnl(currentSignal);
+  const netPnl = calculate24hNetPnl(currentSignal);
   return `${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)}%`;
 }
 
@@ -4653,10 +4662,10 @@ app.post('/api/telegram/test/private', async (req, res) => {
       res.status(400).json({ ok: false, message: 'This account is not linked to Telegram yet.' });
       return;
     }
-    const testNetPnlValue = calculateGeneralNetPnl();
+    const testNetPnlValue = calculate24hNetPnl();
     const testNetPnl = `${testNetPnlValue >= 0 ? '+' : ''}${testNetPnlValue.toFixed(2)}%`;
     const title = `Signal Closed ${formatTradeIdLabel(0)}`;
-    const message = `FUTURES x1 | BTCUSDT LONG | Direction Take Profit | Closed price 76,040.01 | TP 2.63% | SL -1.05% | Duration 8h 38m | PnL 4.15% | Net PnL ${testNetPnl}`;
+    const message = `FUTURES x1 | BTCUSDT LONG | Direction Take Profit | Closed price 76,040.01 | TP 2.63% | SL -1.05% | Duration 8h 38m | PnL 4.15% | 24h Net PnL ${testNetPnl}`;
     const delivery = await sendPrivateTelegramNotification(title, message, 'win', subscriber.chatId);
     if (!delivery.ok) {
       res.status(502).json({ ok: false, message: delivery.message });
