@@ -1,6 +1,7 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, AlertCircle, ArrowDownRight, ArrowUpRight, BarChart3, Bell, Bot, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Eye, EyeOff, Flame, Gauge, Globe2, Home, KeyRound, Newspaper, Search, Send, ShieldAlert, Sparkles, Target, TrendingUp, UserCog, Users, Wallet } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import './styles.css';
 
 type Risk = 'medium' | 'high';
@@ -6333,16 +6334,6 @@ function PerformanceCharts({
     'Performance Leaders': false,
     'Direction Leaders': false
   });
-  const [activeChartRow, setActiveChartRow] = useState<null | (Stat & {
-    winLong: number;
-    winShort: number;
-    lossLong: number;
-    lossShort: number;
-    openLong: number;
-    openShort: number;
-    closedTrades: number;
-    score: number;
-  })>(null);
   const riskMap = new Map(stats.map(stat => [stat.strategyId, stat.risk]));
   const groupedRows = new Map<string, {
     strategyId: string;
@@ -6406,8 +6397,6 @@ function PerformanceCharts({
     losses: acc.losses + row.losses,
     open: acc.open + row.live
   }), { total: 0, wins: 0, losses: 0, open: 0 });
-  const strategyChartMaxValue = Math.max(1, ...chartRows.flatMap(row => [row.wins, row.losses, row.live]));
-  const getStrategyBarHeight = (value: number) => value > 0 ? `${Math.max(4, (value / strategyChartMaxValue) * 100)}%` : '0%';
   const bestReturn = [...insights].sort((a, b) => b.netPnl - a.netPnl)[0] ?? null;
   const bestWinRate = [...insights].filter(item => item.closed > 0).sort((a, b) => b.winRate - a.winRate)[0] ?? null;
   const mostStable = [...insights].filter(item => item.closed > 0).sort((a, b) => b.score - a.score)[0] ?? null;
@@ -6499,38 +6488,17 @@ function PerformanceCharts({
         <h3>Strategy Wins / Losses / Open</h3>
         <div className="chart">
           {chartRows.length === 0 ? <div className="chart-empty-state">No strategy chart data in this range.</div> : <div className="strategy-bars-canvas">
-            <div className="strategy-bars-plot" role="img" aria-label="Strategy wins losses and open trades" onPointerLeave={() => setActiveChartRow(null)}>
-              {chartRows.map(row => <button
-                key={row.strategyId}
-                type="button"
-                className={`strategy-bars-group${activeChartRow?.strategyId === row.strategyId ? ' active' : ''}`}
-                title={`${row.name}: ${row.wins} wins, ${row.losses} losses, ${row.live} open`}
-                onPointerEnter={() => setActiveChartRow(row)}
-                onPointerMove={() => setActiveChartRow(row)}
-                onFocus={() => setActiveChartRow(row)}
-                onBlur={() => setActiveChartRow(null)}
-              >
-                <span className="strategy-bar win" style={{ height: getStrategyBarHeight(row.wins) }}><i>{row.wins}</i></span>
-                <span className="strategy-bar loss" style={{ height: getStrategyBarHeight(row.losses) }}><i>{row.losses}</i></span>
-                <span className="strategy-bar open" style={{ height: getStrategyBarHeight(row.live) }}><i>{row.live}</i></span>
-              </button>)}
-              {activeChartRow && <div className="strategy-chart-popover" role="status">
-                <strong>{activeChartRow.name}</strong>
-                <span><RiskBadge risk={activeChartRow.risk} compact /> <b>{activeChartRow.total}</b> total | {activeChartRow.winRate}% WR</span>
-                <div>
-                  <small>Wins <b className="good">{activeChartRow.wins}</b></small>
-                  <small>Losses <b className="bad">{activeChartRow.losses}</b></small>
-                  <small>Open <b>{activeChartRow.live}</b></small>
-                  <small>Score <b>{activeChartRow.score.toFixed(1)}</b></small>
-                </div>
-                <p>Long {activeChartRow.winLong}/{activeChartRow.lossLong}/{activeChartRow.openLong} | Short {activeChartRow.winShort}/{activeChartRow.lossShort}/{activeChartRow.openShort}</p>
-              </div>}
-            </div>
-            <div className="strategy-chart-legend" aria-hidden="true">
-              <span><i className="win" />Wins</span>
-              <span><i className="loss" />Losses</span>
-              <span><i className="open" />Open</span>
-            </div>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={chartRows} margin={{ top: 16, right: 10, left: 0, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="name" tick={false} axisLine={false} tickLine={false} height={8} />
+                <YAxis tick={false} axisLine={false} tickLine={false} width={8} allowDecimals={false} />
+                <Tooltip content={<StrategyChartTooltip />} cursor={{ fill: 'var(--hover)' }} wrapperStyle={{ outline: 'none' }} />
+                <Bar dataKey="wins" fill="#2fbf71" stroke="#2fbf71" fillOpacity={1} isAnimationActive={false} name="Wins" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="losses" fill="#d85b63" stroke="#d85b63" fillOpacity={1} isAnimationActive={false} name="Losses" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="live" fill="#c9a45c" stroke="#c9a45c" fillOpacity={1} isAnimationActive={false} name="Open" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>}
         </div>
         <div className="performance-chart-summary">
@@ -6543,6 +6511,25 @@ function PerformanceCharts({
       </div>
     </div>
   </section>;
+}
+
+function StrategyChartTooltip({ active, payload }: { active?: boolean; payload?: { payload: Stat & { winLong: number; winShort: number; lossLong: number; lossShort: number; openLong: number; openShort: number; closedTrades: number; score: number } }[] }) {
+  if (!active || !payload?.[0]) return null;
+  const row = payload[0].payload;
+  return <div className="trade-tooltip strategy-chart-tooltip">
+    <strong>{row.name}</strong>
+    <span className="tooltip-heading"><RiskBadge risk={row.risk} compact /> <b className="tooltip-total-count">{row.total}</b> total trades | {row.winRate}% win rate</span>
+    <div className="tooltip-metrics">
+      <small>Closed Trades <b>{row.closedTrades}</b></small>
+      <small>Score <b>{row.score.toFixed(1)}</b></small>
+    </div>
+    <div className="tooltip-table">
+      <div className="tooltip-table-head"><span>Status</span><span className="total-col">Total</span><span>Long</span><span>Short</span></div>
+      <div className="tooltip-row wins"><span>Wins</span><b className="good total-col">{row.wins}</b><b className="good">{row.winLong}</b><b className="good">{row.winShort}</b></div>
+      <div className="tooltip-row losses"><span>Losses</span><b className="bad total-col">{row.losses}</b><b className="bad">{row.lossLong}</b><b className="bad">{row.lossShort}</b></div>
+      <div className="tooltip-row open"><span>Open</span><b className="total-col">{row.live}</b><b>{row.openLong}</b><b>{row.openShort}</b></div>
+    </div>
+  </div>;
 }
 
 type SignalTradeRow = Signal & {

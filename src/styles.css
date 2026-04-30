@@ -14776,3 +14776,172 @@ video {
     height: 4px;
   }
 }
+
+/* Root refresh: restore calm chart interaction and five-column strategy rows */
+.page-dashboard .performance-command .chart {
+  min-height: 340px;
+  padding: 12px;
+  overflow: visible;
+}
+
+.page-dashboard .strategy-bars-canvas {
+  width: 100%;
+  min-width: 0 !important;
+  height: 300px;
+}
+
+.page-dashboard .strategy-bars-canvas .recharts-responsive-container {
+  min-width: 0;
+  touch-action: pan-y;
+}
+
+.page-dashboard .strategy-bars-canvas .recharts-wrapper,
+.page-dashboard .strategy-bars-canvas .recharts-surface {
+  max-width: 100%;
+}
+
+.page-dashboard .strategy-bars-canvas .recharts-bar-rectangle path {
+  filter: drop-shadow(0 8px 18px rgba(0,0,0,.22));
+}
+
+.strategy-chart-tooltip {
+  min-width: 230px;
+  max-width: min(300px, calc(100vw - 34px));
+}
+
+.page-auto-trade .public-strategy-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 10px;
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.page-auto-trade .public-strategy-card,
+.page-auto-trade .public-strategy-card.lab > button:first-child {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name state"
+    "metrics metrics";
+  align-content: start;
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  min-height: 104px;
+  padding: 12px;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 96%, transparent), color-mix(in srgb, var(--panel) 98%, transparent));
+  text-align: left;
+}
+
+.page-auto-trade .public-strategy-card.lab {
+  display: grid;
+  gap: 8px;
+}
+
+.page-auto-trade .public-strategy-card strong {
+  grid-area: name;
+  display: -webkit-box;
+  min-width: 0;
+  min-height: 34px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: clamp(12px, 1.05vw, 15px);
+  line-height: 1.12;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.page-auto-trade .public-strategy-card small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--soft-text);
+  font-size: clamp(10px, .82vw, 12px);
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.page-auto-trade .public-strategy-card small:first-of-type {
+  grid-area: metrics;
+  align-self: end;
+}
+
+.page-auto-trade .public-strategy-card small:nth-of-type(2) {
+  grid-area: metrics;
+  align-self: end;
+  justify-self: end;
+}
+
+.page-auto-trade .public-strategy-card .scoreline {
+  display: none;
+}
+
+.page-auto-trade .public-strategy-card b {
+  grid-area: state;
+  justify-self: end;
+  width: auto;
+  min-width: 38px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1;
+}
+
+@media (max-width: 820px) {
+  .page-dashboard .performance-command .chart {
+    min-height: 306px;
+    padding: 8px;
+  }
+
+  .page-dashboard .strategy-bars-canvas {
+    height: 276px;
+  }
+
+  .strategy-chart-tooltip {
+    min-width: 214px;
+  }
+
+  .page-auto-trade .public-strategy-grid {
+    gap: 5px;
+  }
+
+  .page-auto-trade .public-strategy-card,
+  .page-auto-trade .public-strategy-card.lab > button:first-child {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "name"
+      "state"
+      "metrics";
+    min-height: 92px;
+    padding: 7px 5px;
+    gap: 5px;
+    border-radius: 8px;
+  }
+
+  .page-auto-trade .public-strategy-card strong {
+    min-height: 26px;
+    font-size: clamp(7px, 1.8vw, 9px);
+    line-height: 1.08;
+  }
+
+  .page-auto-trade .public-strategy-card small {
+    font-size: clamp(5.5px, 1.45vw, 7px);
+    line-height: 1.05;
+  }
+
+  .page-auto-trade .public-strategy-card small:nth-of-type(2) {
+    display: none;
+  }
+
+  .page-auto-trade .public-strategy-card b {
+    justify-self: start;
+    min-width: 30px;
+    min-height: 17px;
+    padding: 0 5px;
+    font-size: 6.5px;
+  }
+}
