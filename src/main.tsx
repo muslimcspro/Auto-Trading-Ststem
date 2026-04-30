@@ -1515,10 +1515,10 @@ function HomePage({
 function FieldHint({ label, hint }: { label: string; hint: string }) {
   return <span className="field-label">
     <span>{label}</span>
-    <span className="field-hint">
+    <button type="button" className="field-hint" aria-label={`${label}: ${hint}`}>
       <AlertCircle size={13} />
       <i>{hint}</i>
-    </span>
+    </button>
   </span>;
 }
 

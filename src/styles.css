@@ -3642,6 +3642,10 @@ video {
   justify-content: center;
   width: 16px;
   height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   color: var(--muted);
   cursor: help;
 }
@@ -3667,7 +3671,9 @@ video {
   transition: opacity .14s ease, transform .14s ease;
   box-shadow: 0 16px 32px rgba(0,0,0,.28);
 }
-.field-hint:hover i {
+.field-hint:hover i,
+.field-hint:focus-visible i,
+.field-hint:focus i {
   opacity: 1;
   transform: translateY(-50%) translateX(0);
 }
@@ -13874,22 +13880,67 @@ video {
     height: 14px;
   }
 
+  .page-auto-trade .field-hint {
+    cursor: pointer;
+  }
+
+  .page-auto-trade .field-hint i {
+    left: auto;
+    right: 0;
+    top: calc(100% + 7px);
+    min-width: min(220px, 72vw);
+    max-width: min(260px, 78vw);
+    transform: translateY(-4px);
+  }
+
+  .page-auto-trade .field-hint:hover i,
+  .page-auto-trade .field-hint:focus i,
+  .page-auto-trade .field-hint:focus-visible i {
+    transform: translateY(0);
+  }
+
   .page-auto-trade .live-futures-rule-card {
-    min-height: 156px;
+    min-height: 130px;
+  }
+
+  .page-auto-trade .live-futures-settings.live-futures-settings-advanced {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(74px, 24vw, 102px);
+    align-items: center;
+    gap: 7px;
+    width: 100%;
   }
 
   .page-auto-trade .live-leverage-spectrum {
     display: grid;
     grid-template-rows: auto auto auto;
-    gap: 7px;
+    gap: 6px;
     width: 100%;
-    padding: 8px 7px 9px;
+    min-height: 92px;
+    padding: 8px 6px 8px;
     overflow: visible;
   }
 
   .page-auto-trade .live-leverage-spectrum-rail {
+    height: 21px;
     width: 100%;
     min-width: 0;
+  }
+
+  .page-auto-trade .live-leverage-spectrum-rail::before,
+  .page-auto-trade .live-leverage-spectrum-rail::after {
+    height: 7px;
+  }
+
+  .page-auto-trade .live-leverage-spectrum-rail input[type="range"] {
+    height: 24px;
+  }
+
+  .page-auto-trade .live-leverage-spectrum-rail input[type="range"]::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+    margin-top: -6px;
+    border-width: 3px;
   }
 
   .page-auto-trade .live-leverage-spectrum-ticks {
@@ -13901,36 +13952,42 @@ video {
 
   .page-auto-trade .live-leverage-spectrum-ticks button {
     min-width: 0;
-    min-height: 18px;
+    min-height: 16px;
     padding: 0;
-    font-size: clamp(8px, 2.05vw, 10px);
+    font-size: clamp(7px, 1.85vw, 9px);
     line-height: 1;
     text-align: center;
   }
 
   .page-auto-trade .live-leverage-risk-scale {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: 28% 39% 33%;
     gap: 0;
     width: 100%;
+    padding-top: 7px;
   }
 
   .page-auto-trade .live-leverage-risk-scale span {
     overflow: hidden;
-    font-size: clamp(5px, 1.35vw, 7px);
+    font-size: clamp(4.8px, 1.25vw, 6.5px);
     line-height: 1;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .page-auto-trade .live-futures-rule-card .selection-pill-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
+    align-content: center;
+    gap: 6px;
     width: 100%;
   }
 
   .page-auto-trade .live-futures-rule-card .selection-pill-row button {
     min-width: 0;
     width: 100%;
+    min-height: 27px;
+    padding: 0 5px;
+    font-size: clamp(8px, 2vw, 10px);
   }
 
   .page-auto-trade .portfolio-rejected-table th:nth-child(7),
@@ -13993,10 +14050,22 @@ video {
   }
 
   .page-auto-trade .admin-personal-summary .protected-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: fit-content;
+    min-width: 110px;
     min-height: 34px;
     padding: 0 13px;
     border-radius: 999px;
     font-size: 15px !important;
     white-space: nowrap;
+  }
+
+  .page-auto-trade .admin-personal-summary .protected-status::before {
+    flex: 0 0 7px;
+    width: 7px;
+    height: 7px;
+    margin-right: 8px;
   }
 }
