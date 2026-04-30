@@ -730,6 +730,18 @@ function App() {
   const shell = (
     <div className="app-shell">
       <header className="shell-header">
+        <div className="shell-brand" aria-label="Auto Trading System">
+          <span className="shell-brand-mark"><TrendingUp size={20} /></span>
+          <div>
+            <strong>Auto Trading</strong>
+            <small>Live crypto command center</small>
+          </div>
+        </div>
+        <nav className="shell-nav" aria-label="Primary navigation">
+          <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><Home size={17} /> <span>Home</span></button>
+          <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}><BarChart3 size={17} /> <span>Dashboard</span></button>
+          <button className={page === 'auto-trade' ? 'active premium' : 'premium'} onClick={openAutoTradeLogin}><Bot size={17} /> <span>Auto Trading</span></button>
+        </nav>
         <div className="shell-tools">
           <ThemeStudio currentTheme={theme} onOpen={() => setThemePanelOpen(true)} />
           <NotificationSettings
@@ -741,13 +753,8 @@ function App() {
             onClose={() => setAlertsPanelOpen(false)}
           />
         </div>
-        <nav className="shell-nav">
-          <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><Home size={17} /> Home</button>
-          <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}><BarChart3 size={17} /> Dashboard</button>
-          <button className={page === 'auto-trade' ? 'active premium' : 'premium'} onClick={openAutoTradeLogin}><Bot size={17} /> Auto Trading</button>
-        </nav>
       </header>
-      <main>
+      <main className={`page-frame page-${page}`}>
         {page === 'home' && <HomePage
           spotTop={spotTop}
           futuresTop={futuresTop}
