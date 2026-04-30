@@ -4252,7 +4252,7 @@ function AutoTradePage({
                       <span className="high">High Risk</span>
                     </div>
                   </div>
-                  <div className="selection-pill-row">
+                  <div className="selection-pill-row live-margin-mode-row">
                     {([
                       ['isolated', 'Isolated'],
                       ['cross', 'Cross']
