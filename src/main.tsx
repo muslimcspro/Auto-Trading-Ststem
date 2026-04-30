@@ -6294,11 +6294,17 @@ function PerformanceCharts({
   onCustomFromChange: (value: string) => void;
   onCustomToChange: (value: string) => void;
 }) {
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [openLeaderSections, setOpenLeaderSections] = useState<Record<string, boolean>>({
     'Timeframe Leaders': false,
     'Performance Leaders': false,
     'Direction Leaders': false
   });
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   const riskMap = new Map(stats.map(stat => [stat.strategyId, stat.risk]));
   const groupedRows = new Map<string, {
     strategyId: string;
@@ -6362,6 +6368,7 @@ function PerformanceCharts({
     losses: acc.losses + row.losses,
     open: acc.open + row.live
   }), { total: 0, wins: 0, losses: 0, open: 0 });
+  const strategyChartWidth = Math.max(340, Math.min(920, viewportWidth - 56));
   const bestReturn = [...insights].sort((a, b) => b.netPnl - a.netPnl)[0] ?? null;
   const bestWinRate = [...insights].filter(item => item.closed > 0).sort((a, b) => b.winRate - a.winRate)[0] ?? null;
   const mostStable = [...insights].filter(item => item.closed > 0).sort((a, b) => b.score - a.score)[0] ?? null;
@@ -6452,8 +6459,8 @@ function PerformanceCharts({
       <div className="chart-block wide">
         <h3>Strategy Wins / Losses / Open</h3>
         <div className="chart">
-          {chartRows.length === 0 ? <div className="chart-empty-state">No strategy chart data in this range.</div> : <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={chartRows}>
+          {chartRows.length === 0 ? <div className="chart-empty-state">No strategy chart data in this range.</div> : <div className="strategy-bars-canvas">
+            <BarChart width={strategyChartWidth} height={300} data={chartRows}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={{ stroke: 'var(--border)' }} tickLine={{ stroke: 'var(--border)' }} />
               <YAxis tick={{ fill: 'var(--muted)' }} axisLine={{ stroke: 'var(--border)' }} tickLine={{ stroke: 'var(--border)' }} />
@@ -6462,7 +6469,7 @@ function PerformanceCharts({
               <Bar dataKey="losses" fill="#d85b63" stroke="#d85b63" fillOpacity={1} isAnimationActive={false} name="Losses" radius={[4, 4, 0, 0]} maxBarSize={28} />
               <Bar dataKey="live" fill="#c9a45c" stroke="#c9a45c" fillOpacity={1} isAnimationActive={false} name="Open" radius={[4, 4, 0, 0]} maxBarSize={28} />
             </BarChart>
-          </ResponsiveContainer>}
+          </div>}
         </div>
         <div className="performance-chart-summary">
           <span>Ranked By <b>Score</b></span>
