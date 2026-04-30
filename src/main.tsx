@@ -357,10 +357,10 @@ const normalizeBinanceConnection = (value?: Partial<BinanceConnection> | null): 
 const loginStorageKey = (role: 'user' | 'admin') => `autoTrade.savedLogin.${role}`;
 
 const themes: { id: Theme; name: string }[] = [
+  { id: 'graphite', name: 'Graphite Desk' },
   { id: 'executive', name: 'Executive Slate' },
   { id: 'navy', name: 'Institutional Navy' },
   { id: 'emerald', name: 'Market Emerald' },
-  { id: 'graphite', name: 'Graphite Desk' },
   { id: 'light', name: 'Light Terminal' }
 ];
 
@@ -528,6 +528,11 @@ function App() {
   const [page, setPage] = useState<Page>('home');
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme') as Theme | null;
+    const migratedDefault = localStorage.getItem('themeDefaultGraphiteV2') === 'true';
+    if (!migratedDefault && (!saved || saved === 'executive')) {
+      localStorage.setItem('themeDefaultGraphiteV2', 'true');
+      return 'graphite';
+    }
     return themes.some(item => item.id === saved) ? saved! : 'graphite';
   });
   const [toastDuration, setToastDuration] = useState(() => Number(localStorage.getItem('toastDuration') ?? 2000));
@@ -1097,12 +1102,26 @@ function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; on
 }
 
 function ThemeStudio({ currentTheme, onOpen }: { currentTheme: Theme; onOpen: () => void }) {
-  return <section className={`theme-studio ${currentTheme}`}>
+  return <section
+    className={`theme-studio ${currentTheme}`}
+    role="button"
+    tabIndex={0}
+    onClick={onOpen}
+    onKeyDown={event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onOpen();
+      }
+    }}
+  >
     <div>
       <span>Theme</span>
       <strong>Theme</strong>
     </div>
-    <button onClick={onOpen}>Customize</button>
+    <button onClick={event => {
+      event.stopPropagation();
+      onOpen();
+    }}>Customize</button>
   </section>;
 }
 
@@ -1513,9 +1532,20 @@ function HomePage({
 }
 
 function FieldHint({ label, hint }: { label: string; hint: string }) {
+  const [open, setOpen] = useState(false);
   return <span className="field-label">
     <span>{label}</span>
-    <button type="button" className="field-hint" aria-label={`${label}: ${hint}`}>
+    <button
+      type="button"
+      className={open ? 'field-hint open' : 'field-hint'}
+      aria-label={`${label}: ${hint}`}
+      aria-expanded={open}
+      onClick={event => {
+        event.stopPropagation();
+        setOpen(value => !value);
+      }}
+      onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+    >
       <AlertCircle size={13} />
       <i>{hint}</i>
     </button>
@@ -6361,7 +6391,6 @@ function PerformanceCharts({
     losses: acc.losses + row.losses,
     open: acc.open + row.live
   }), { total: 0, wins: 0, losses: 0, open: 0 });
-  const strategyChartWidth = Math.max(340, Math.min(920, viewportWidth - 56));
   const bestReturn = [...insights].sort((a, b) => b.netPnl - a.netPnl)[0] ?? null;
   const bestWinRate = [...insights].filter(item => item.closed > 0).sort((a, b) => b.winRate - a.winRate)[0] ?? null;
   const mostStable = [...insights].filter(item => item.closed > 0).sort((a, b) => b.score - a.score)[0] ?? null;
@@ -6453,15 +6482,17 @@ function PerformanceCharts({
         <h3>Strategy Wins / Losses / Open</h3>
         <div className="chart">
           {chartRows.length === 0 ? <div className="chart-empty-state">No strategy chart data in this range.</div> : <div className="strategy-bars-canvas">
-            <BarChart width={strategyChartWidth} height={300} data={chartRows}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="name" tick={false} axisLine={false} tickLine={false} height={8} />
-              <YAxis tick={false} axisLine={false} tickLine={false} width={8} />
-              <Tooltip content={<StrategyChartTooltip />} cursor={{ fill: 'var(--hover)' }} />
-              <Bar dataKey="wins" fill="#2fbf71" stroke="#2fbf71" fillOpacity={1} isAnimationActive={false} name="Wins" radius={[4, 4, 0, 0]} maxBarSize={28} />
-              <Bar dataKey="losses" fill="#d85b63" stroke="#d85b63" fillOpacity={1} isAnimationActive={false} name="Losses" radius={[4, 4, 0, 0]} maxBarSize={28} />
-              <Bar dataKey="live" fill="#c9a45c" stroke="#c9a45c" fillOpacity={1} isAnimationActive={false} name="Open" radius={[4, 4, 0, 0]} maxBarSize={28} />
-            </BarChart>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={chartRows}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="name" tick={false} axisLine={false} tickLine={false} height={8} />
+                <YAxis tick={false} axisLine={false} tickLine={false} width={8} />
+                <Tooltip content={<StrategyChartTooltip />} cursor={{ fill: 'var(--hover)' }} />
+                <Bar dataKey="wins" fill="#2fbf71" stroke="#2fbf71" fillOpacity={1} isAnimationActive={false} name="Wins" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="losses" fill="#d85b63" stroke="#d85b63" fillOpacity={1} isAnimationActive={false} name="Losses" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="live" fill="#c9a45c" stroke="#c9a45c" fillOpacity={1} isAnimationActive={false} name="Open" radius={[4, 4, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>}
         </div>
         <div className="performance-chart-summary">
