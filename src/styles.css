@@ -14791,13 +14791,16 @@ video {
 }
 
 .page-dashboard .strategy-bars-canvas .recharts-responsive-container {
+  width: 100% !important;
   min-width: 0;
   touch-action: pan-y;
 }
 
 .page-dashboard .strategy-bars-canvas .recharts-wrapper,
 .page-dashboard .strategy-bars-canvas .recharts-surface {
-  max-width: 100%;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
 }
 
 .page-dashboard .strategy-bars-canvas .recharts-bar-rectangle path {
@@ -14943,5 +14946,41 @@ video {
     min-height: 17px;
     padding: 0 5px;
     font-size: 6.5px;
+  }
+}
+
+/* Recharts root fix: keep the chart drawable after responsive/mobile overrides. */
+.page-dashboard .chart .strategy-bars-canvas {
+  display: block !important;
+  position: relative;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 300px !important;
+  overflow: visible !important;
+}
+
+.page-dashboard .chart .strategy-bars-canvas > .recharts-responsive-container {
+  width: 100% !important;
+  height: 300px !important;
+  min-width: 0 !important;
+}
+
+.page-dashboard .chart .strategy-bars-canvas .recharts-wrapper {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
+.page-dashboard .chart .strategy-bars-canvas .recharts-surface {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  height: 100% !important;
+}
+
+@media (max-width: 820px) {
+  .page-dashboard .chart .strategy-bars-canvas,
+  .page-dashboard .chart .strategy-bars-canvas > .recharts-responsive-container {
+    height: 276px !important;
   }
 }
