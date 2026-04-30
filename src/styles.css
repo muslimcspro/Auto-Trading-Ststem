@@ -14965,6 +14965,11 @@ video {
   min-width: 0 !important;
 }
 
+.page-dashboard .chart .strategy-bars-canvas > .recharts-responsive-container > div {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
 .page-dashboard .chart .strategy-bars-canvas .recharts-wrapper {
   width: 100% !important;
   max-width: none !important;
