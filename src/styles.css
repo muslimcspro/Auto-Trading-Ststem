@@ -13441,3 +13441,166 @@ video {
     font-size: clamp(7px, 2.35vw, 10px);
   }
 }
+
+/* Auto Trading live rules and public controls final mobile pass */
+@media (max-width: 820px) {
+  .page-auto-trade .live-rules-toggle {
+    min-height: 42px;
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .page-auto-trade .live-rules-toggle-main strong {
+    font-size: 14px;
+  }
+
+  .page-auto-trade .live-rules-toggle-main span {
+    font-size: 7px;
+    line-height: 1.15;
+  }
+
+  .page-auto-trade .live-rules-badge-row {
+    gap: 4px;
+  }
+
+  .page-auto-trade .live-rules-panel-grid,
+  .page-auto-trade .live-rules-shell.open .live-rules-panel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    padding: 0 6px 6px;
+  }
+
+  .page-auto-trade .live-rules-panel-card,
+  .page-auto-trade .live-rules-shell.open .live-rules-panel-card {
+    min-height: 76px;
+    padding: 7px;
+    gap: 6px;
+    border-radius: 12px;
+  }
+
+  .page-auto-trade .live-rule-wide {
+    grid-column: 1 / -1;
+  }
+
+  .page-auto-trade .live-futures-rule-card {
+    min-height: 134px;
+  }
+
+  .page-auto-trade .live-rules-panel-card .field-label-inline,
+  .page-auto-trade .live-rules-panel-card .venue-switch-head {
+    align-items: center;
+    gap: 4px;
+  }
+
+  .page-auto-trade .field-label-inline span,
+  .page-auto-trade .venue-switch-head strong,
+  .page-auto-trade .live-rules-panel-card strong {
+    font-size: clamp(7px, 2vw, 9px);
+    line-height: 1.08;
+  }
+
+  .page-auto-trade .field-priority,
+  .page-auto-trade .selection-footnote {
+    display: none;
+  }
+
+  .page-auto-trade .selection-pill-row,
+  .page-auto-trade .venue-switch {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+    overflow: visible;
+  }
+
+  .page-auto-trade .live-futures-direction-card .selection-pill-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .page-auto-trade .selection-pill-row button,
+  .page-auto-trade .venue-switch button,
+  .page-auto-trade .danger-action-button {
+    min-width: 0;
+    min-height: 30px;
+    padding: 0 5px;
+    font-size: clamp(8px, 2.25vw, 11px);
+    line-height: 1.05;
+    white-space: nowrap;
+  }
+
+  .page-auto-trade .danger-action-button {
+    width: 100%;
+    margin-top: 5px;
+  }
+
+  .page-auto-trade .selection-inline-input span {
+    font-size: 8px;
+  }
+
+  .page-auto-trade .selection-inline-input input {
+    min-height: 34px;
+    font-size: 12px;
+  }
+
+  .page-auto-trade .live-leverage-spectrum {
+    padding: 6px 6px 8px;
+  }
+
+  .page-auto-trade .live-leverage-spectrum-ticks button {
+    min-height: 20px;
+    font-size: 9px;
+  }
+
+  .page-auto-trade .live-leverage-risk-scale span {
+    font-size: 6px;
+  }
+
+  .page-auto-trade .portfolio-ledger-meta-row .trade-extreme-card {
+    min-height: 68px;
+    align-content: center;
+  }
+
+  .page-auto-trade .portfolio-ledger-meta-row .trade-extreme-card span {
+    font-size: clamp(7px, 2vw, 9px);
+    -webkit-line-clamp: 1;
+  }
+
+  .page-auto-trade .portfolio-ledger-meta-row .trade-extreme-card strong {
+    font-size: clamp(11px, 3.2vw, 15px);
+  }
+
+  .page-auto-trade .public-strategy-card {
+    display: grid;
+    align-content: start;
+    gap: 4px;
+  }
+
+  .page-auto-trade .public-strategy-card strong {
+    display: -webkit-box;
+    overflow: hidden;
+    min-height: 22px;
+    font-size: clamp(7px, 2vw, 9px);
+    line-height: 1.08;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .page-auto-trade .public-strategy-card small {
+    display: block;
+    overflow: visible;
+    font-size: clamp(5.5px, 1.55vw, 7px);
+    line-height: 1.05;
+    white-space: nowrap;
+  }
+
+  .page-auto-trade .public-strategy-card b {
+    justify-self: start;
+    min-height: 18px;
+    padding: 0 6px;
+    font-size: 7px;
+  }
+
+  .page-auto-trade .public-strategy-card .scoreline {
+    height: 4px;
+    margin-top: 1px;
+  }
+}

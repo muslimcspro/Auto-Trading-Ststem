@@ -3506,6 +3506,19 @@ function AutoTradePage({
   const labStrategySet = useMemo(() => new Set(labStrategyIds), [labStrategyIds]);
   const publicStrategies = useMemo(() => strategies.filter(strategy => !labStrategySet.has(strategy.id)), [labStrategySet, strategies]);
   const labStrategies = useMemo(() => strategies.filter(strategy => labStrategySet.has(strategy.id)), [labStrategySet, strategies]);
+  const adminStrategyMetrics = useMemo(() => {
+    const metrics = new Map<string, { total: number; closed: number; wins: number; winRate: number; score: number }>();
+    for (const strategy of strategies) {
+      const own = signals.filter(signal => signal.strategyId === strategy.id);
+      const closed = own.filter(signal => signal.status !== 'OPEN');
+      const wins = own.filter(signal => signal.status === 'WIN').length;
+      const losses = own.filter(signal => signal.status === 'LOSS').length;
+      const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
+      const score = closed.length ? Math.max(0, Math.min(100, (winRate * 0.7) + (wins * 3) - (losses * 4))) : 0;
+      metrics.set(strategy.id, { total: own.length, closed: closed.length, wins, winRate, score });
+    }
+    return metrics;
+  }, [signals, strategies]);
 
   const updateShadowRuleProfile = (profileId: string, patch: Partial<ShadowRuleProfile>) => {
     setShadowRuleProfiles(prev => {
@@ -4249,27 +4262,6 @@ function AutoTradePage({
                   </div>
                 </div>
               </div>}
-              {venueMode === 'futures' && <div className="selection-control-card live-rules-panel-card live-rule-wide live-protection-rule-card">
-                <span className="field-label-inline"><FieldHint label="Live Protection" hint="Closes live Binance Futures positions when break-even, trailing stop, or portfolio floor rules trigger." /><small className="field-priority">Binance</small></span>
-                <div className="live-protection-grid">
-                  <label className="protection-toggle-row">
-                    <input type="checkbox" checked={breakEvenEnabled} onChange={event => setBreakEvenEnabled(event.target.checked)} />
-                    <span>Break-even lock</span>
-                  </label>
-                  <div className="protection-concept-note"><b>Dynamic R</b><span>Arms after the trade earns enough of its original risk.</span></div>
-                  <label className="protection-toggle-row">
-                    <input type="checkbox" checked={trailingStopEnabled} onChange={event => setTrailingStopEnabled(event.target.checked)} />
-                    <span>Trailing stop</span>
-                  </label>
-                  <div className="protection-concept-note"><b>Adaptive gap</b><span>Uses risk, target distance, and market volatility.</span></div>
-                  <label className="protection-toggle-row">
-                    <input type="checkbox" checked={portfolioFloorEnabled} onChange={event => setPortfolioFloorEnabled(event.target.checked)} />
-                    <span>Portfolio floor</span>
-                  </label>
-                  <div className="protection-concept-note protection-wide-note"><b>Basket R floor</b><span>Arms when open trades earn about one shared risk unit, then locks a dynamic part of the peak.</span></div>
-                </div>
-                <small className="selection-footnote">Protection runs only in LIVE Futures and sends real Binance close orders for matched open positions. Thresholds are derived from each trade instead of fixed percentages.</small>
-              </div>}
             </div>
             <div className="shadow-rule-actions live-rules-actions">
               {rulesSaveMessage && <small className="admin-credential-message good">{rulesSaveMessage}</small>}
@@ -4420,27 +4412,22 @@ function AutoTradePage({
               <button type="button" className="trade-extreme-card" onClick={() => { setPortfolioTradesStatusFilter('all'); setPortfolioTradeQuery(''); }}>
                 <span>Generated</span>
                 <strong>{effectiveGeneratedTotal}</strong>
-                <small>All generated trades routed through portfolio classification</small>
               </button>
               <button type="button" className="trade-extreme-card" onClick={() => setPortfolioTradesStatusFilter('all')}>
                 <span>Accepted</span>
                 <strong className="good">{effectiveAcceptedTotal}</strong>
-                <small>Passed rules and broker execution checks</small>
               </button>
               <button type="button" className="trade-extreme-card" onClick={() => { setPortfolioTradesStatusFilter('all'); setPortfolioRejectedTradeQuery(''); }}>
                 <span>Rejected</span>
                 <strong className={effectiveRejectedTotal > 0 ? 'bad' : ''}>{effectiveRejectedTotal}</strong>
-                <small>Rejected by rules, pending, or broker-side failure</small>
               </button>
               <button type="button" className="trade-extreme-card" onClick={cyclePortfolioModeFilter}>
                 <span>Mode</span>
                 <strong>{portfolioTradesExecutionProfileFilter === 'all' ? 'All' : formatExitModeLabel(portfolioTradesExecutionProfileFilter)}</strong>
-                <small>{portfolioTradesExecutionProfileFilter === 'all' ? 'Showing every mode' : `${formatExitModeLabel(portfolioTradesExecutionProfileFilter)} filter active`}</small>
               </button>
               <button type="button" className="trade-extreme-card" onClick={cyclePortfolioTimeframeFilter}>
                 <span>Timeframe</span>
                 <strong>{portfolioTradesTimeframeFilter === 'all' ? 'All' : portfolioTradesTimeframeFilter}</strong>
-                <small>{portfolioTradesTimeframeFilter === 'all' ? 'Showing every timeframe' : `${portfolioTradesTimeframeFilter} filter active`}</small>
               </button>
             </div>
             {livePortfolioLoading && autoMode === 'live' && <p className="empty">Loading live portfolio ledger...</p>}
@@ -4652,8 +4639,12 @@ function AutoTradePage({
               {publicStrategies.length === 0 && <p className="empty">No public strategies yet.</p>}
               {publicStrategies.map(strategy => {
                 const isActive = selected.has(strategy.id);
+                const metrics = adminStrategyMetrics.get(strategy.id);
                 return <button key={strategy.id} type="button" className={isActive ? 'public-strategy-card active' : 'public-strategy-card'} onClick={() => toggleAdminStrategy(strategy.id)}>
-                  <span>{strategy.name}</span>
+                  <strong>{strategy.name}</strong>
+                  <small>{metrics?.winRate ?? 0}% WR</small>
+                  <small>{(metrics?.score ?? 0).toFixed(1)} score</small>
+                  <div className="scoreline"><i style={{ width: `${metrics?.winRate ?? 0}%` }} /></div>
                   <b>{isActive ? 'ON' : 'OFF'}</b>
                 </button>;
               })}
@@ -4664,7 +4655,10 @@ function AutoTradePage({
                 const isActive = selected.has(strategy.id);
                 return <article key={strategy.id} className={isActive ? 'public-strategy-card active lab' : 'public-strategy-card lab'}>
                   <button type="button" onClick={() => toggleAdminStrategy(strategy.id)}>
-                    <span>{strategy.name}</span>
+                    <strong>{strategy.name}</strong>
+                    <small>{adminStrategyMetrics.get(strategy.id)?.winRate ?? 0}% WR</small>
+                    <small>{(adminStrategyMetrics.get(strategy.id)?.score ?? 0).toFixed(1)} score</small>
+                    <div className="scoreline"><i style={{ width: `${adminStrategyMetrics.get(strategy.id)?.winRate ?? 0}%` }} /></div>
                     <b>{isActive ? 'ON' : 'OFF'}</b>
                   </button>
                   <button type="button" className="move" onClick={() => moveLabStrategyToPublic(strategy.id)}>Move To Public</button>
