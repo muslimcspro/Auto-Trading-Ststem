@@ -528,7 +528,7 @@ function App() {
   const [page, setPage] = useState<Page>('home');
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme') as Theme | null;
-    return themes.some(item => item.id === saved) ? saved! : 'executive';
+    return themes.some(item => item.id === saved) ? saved! : 'graphite';
   });
   const [toastDuration, setToastDuration] = useState(() => Number(localStorage.getItem('toastDuration') ?? 2000));
   const [alertsEnabled, setAlertsEnabled] = useState(() => localStorage.getItem('alertsEnabled') !== 'false');
@@ -1097,11 +1097,10 @@ function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; on
 }
 
 function ThemeStudio({ currentTheme, onOpen }: { currentTheme: Theme; onOpen: () => void }) {
-  const active = themes.find(item => item.id === currentTheme)!;
   return <section className={`theme-studio ${currentTheme}`}>
     <div>
       <span>Theme</span>
-      <strong>{active.name}</strong>
+      <strong>Theme</strong>
     </div>
     <button onClick={onOpen}>Customize</button>
   </section>;
@@ -1118,7 +1117,10 @@ function ThemePanel({ currentTheme, onPick, onClose }: { currentTheme: Theme; on
         <button onClick={onClose}>Close</button>
       </header>
       <div className="theme-showcase">
-        {themes.map(item => <button key={item.id} className={currentTheme === item.id ? `theme-showcase-card ${item.id} active` : `theme-showcase-card ${item.id}`} onClick={() => onPick(item.id)}>
+        {themes.map(item => <button key={item.id} className={currentTheme === item.id ? `theme-showcase-card ${item.id} active` : `theme-showcase-card ${item.id}`} onClick={() => {
+          onPick(item.id);
+          onClose();
+        }}>
           <div className="showcase-top">
             <span>{item.name}</span>
             <b>{currentTheme === item.id ? 'ACTIVE' : 'SELECT'}</b>
@@ -6450,7 +6452,7 @@ function PerformanceCharts({
       <div className="chart-block wide">
         <h3>Strategy Wins / Losses / Open</h3>
         <div className="chart">
-          <ResponsiveContainer width="100%" height={300}>
+          {chartRows.length === 0 ? <div className="chart-empty-state">No strategy chart data in this range.</div> : <ResponsiveContainer width="100%" height={300}>
             <BarChart data={chartRows}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={{ stroke: 'var(--border)' }} tickLine={{ stroke: 'var(--border)' }} />
@@ -6460,7 +6462,7 @@ function PerformanceCharts({
               <Bar dataKey="losses" fill="#d85b63" stroke="#d85b63" fillOpacity={1} isAnimationActive={false} name="Losses" radius={[4, 4, 0, 0]} maxBarSize={28} />
               <Bar dataKey="live" fill="#c9a45c" stroke="#c9a45c" fillOpacity={1} isAnimationActive={false} name="Open" radius={[4, 4, 0, 0]} maxBarSize={28} />
             </BarChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer>}
         </div>
         <div className="performance-chart-summary">
           <span>Ranked By <b>Score</b></span>

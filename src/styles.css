@@ -11640,6 +11640,439 @@ video {
   }
 }
 
+/* Final mobile parity/layout correction */
+.chart-empty-state {
+  min-height: 300px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 8px;
+  color: var(--muted);
+  font-weight: 800;
+  text-align: center;
+}
+
+@media (max-width: 820px) {
+  .shell-header {
+    grid-template-columns: 1fr;
+    gap: 7px;
+    padding: 8px 10px;
+  }
+
+  .shell-tools {
+    order: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  .shell-nav {
+    order: 2;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+  }
+
+  .shell-brand {
+    display: none;
+  }
+
+  .theme-studio,
+  .notification-settings {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    min-height: 38px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    overflow: hidden;
+  }
+
+  .theme-studio div:first-child,
+  .notification-settings > div:first-child {
+    min-width: 0;
+  }
+
+  .theme-studio span,
+  .notification-settings span {
+    font-size: 8px;
+    line-height: 1;
+  }
+
+  .theme-studio strong,
+  .notification-settings strong {
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .theme-studio button,
+  .notification-settings button {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+
+  .shell-nav button {
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 7px;
+    gap: 5px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .shell-nav button svg {
+    width: 13px;
+    height: 13px;
+    flex: 0 0 auto;
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom,
+  .page-auto-trade .trade-extremes-row-top,
+  .page-auto-trade .trade-extremes-row-bottom,
+  .page-auto-trade .portfolio-ledger-meta-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .page-dashboard .trade-extreme-card,
+  .page-auto-trade .trade-extreme-card {
+    min-width: 0;
+    min-height: 78px;
+    padding: 7px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .trade-extremes span,
+  .page-dashboard .trade-extremes small,
+  .page-auto-trade .trade-extremes span,
+  .page-auto-trade .trade-extremes small {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 7px;
+    line-height: 1.18;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .page-dashboard .trade-extremes strong,
+  .page-auto-trade .trade-extremes strong {
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .signal-filters,
+  .page-auto-trade .signal-filters,
+  .page-auto-trade .portfolio-trade-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .page-dashboard .signal-filters > div,
+  .page-auto-trade .signal-filters > div,
+  .page-auto-trade .portfolio-filter-block,
+  .page-auto-trade .portfolio-trade-range {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-dashboard .strategy-scorecards,
+  .page-auto-trade .strategy-scorecards,
+  .page-auto-trade .public-strategy-grid,
+  .page-auto-trade .admin-strategy-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .page-dashboard .scorecard,
+  .page-dashboard .strategy-scorecards article,
+  .page-dashboard .strategy-scorecards button,
+  .page-auto-trade .scorecard,
+  .page-auto-trade .strategy-scorecards article,
+  .page-auto-trade .strategy-scorecards button,
+  .page-auto-trade .public-strategy-card,
+  .page-auto-trade .admin-strategy-card {
+    min-width: 0;
+    min-height: 118px;
+    padding: 7px;
+    gap: 5px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .scorecard strong,
+  .page-auto-trade .scorecard strong,
+  .page-auto-trade .public-strategy-card strong,
+  .page-auto-trade .admin-strategy-card strong {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 1.05;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .page-dashboard .scorecard small,
+  .page-dashboard .scorecard-caption,
+  .page-dashboard .scorecard-score,
+  .page-auto-trade .scorecard small,
+  .page-auto-trade .public-strategy-card span,
+  .page-auto-trade .public-strategy-card small,
+  .page-auto-trade .admin-strategy-card span {
+    overflow: hidden;
+    font-size: 6.5px;
+    line-height: 1.2;
+  }
+
+  .page-dashboard .risk-badge,
+  .page-dashboard .strategy-switch,
+  .page-auto-trade .risk-badge,
+  .page-auto-trade .strategy-switch,
+  .page-auto-trade .nav-badge {
+    min-height: 18px;
+    padding: 0 5px;
+    font-size: 6.5px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .command-summary,
+  .page-auto-trade .command-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .page-dashboard .command-summary .selected-brief,
+  .page-auto-trade .command-summary .selected-brief {
+    grid-column: span 1;
+  }
+
+  .page-dashboard .command-summary article,
+  .page-auto-trade .command-summary article {
+    min-width: 0;
+    min-height: 78px;
+    padding: 7px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .command-summary span,
+  .page-dashboard .command-summary small,
+  .page-auto-trade .command-summary span,
+  .page-auto-trade .command-summary small {
+    font-size: 7px;
+    line-height: 1.2;
+  }
+
+  .page-dashboard .command-summary strong,
+  .page-auto-trade .command-summary strong {
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.08;
+    text-overflow: ellipsis;
+  }
+
+  .page-dashboard .chart,
+  .page-dashboard .chart-block,
+  .page-dashboard .chart-grid,
+  .page-dashboard .performance-charts {
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .page-dashboard .chart {
+    min-height: 300px;
+  }
+
+  .page-dashboard .chart .recharts-responsive-container {
+    min-width: 0;
+  }
+
+  .page-auto-trade .live-rules-shell,
+  .page-auto-trade .public-controls-shell,
+  .page-auto-trade .admin-personal-panel,
+  .page-auto-trade .access-board-card {
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-auto-trade .live-rules-panel-grid,
+  .page-auto-trade .live-rules-shell.open .live-rules-panel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 620px;
+    gap: 8px;
+  }
+
+  .page-auto-trade .live-rules-panel-card {
+    min-width: 0;
+  }
+
+  .page-auto-trade .public-strategy-grid {
+    min-width: 620px;
+  }
+
+  .page-auto-trade .admin-personal-body {
+    grid-template-columns: repeat(2, minmax(300px, 1fr));
+    min-width: 650px;
+  }
+
+  .page-auto-trade .admin-personal-card,
+  .page-auto-trade .admin-personal-summary article {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .page-auto-trade .admin-personal-card-head strong,
+  .page-auto-trade .admin-personal-summary strong {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .page-auto-trade .access-command-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .page-auto-trade .access-directory {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-auto-trade .access-directory-header,
+  .page-auto-trade .access-directory-row {
+    min-width: 780px;
+  }
+
+  .page-auto-trade .access-directory-row strong,
+  .page-auto-trade .access-directory-row span,
+  .page-auto-trade .request-actions button {
+    white-space: nowrap;
+  }
+
+  .page-auto-trade .portfolio-detail-grid,
+  .page-auto-trade .portfolio-ledger-section,
+  .page-auto-trade .portfolio-ledger-shell {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .page-auto-trade .portfolio-ledger-scroll,
+  .page-auto-trade .trade-ledger-scroll,
+  .page-dashboard .trade-ledger-scroll {
+    overflow-x: auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 430px) {
+  .shell-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .theme-studio,
+  .notification-settings {
+    min-height: 36px;
+    padding: 5px 7px;
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom,
+  .page-auto-trade .trade-extremes-row-top,
+  .page-auto-trade .trade-extremes-row-bottom,
+  .page-auto-trade .portfolio-ledger-meta-row {
+    gap: 4px;
+  }
+
+  .page-dashboard .trade-extreme-card,
+  .page-auto-trade .trade-extreme-card {
+    min-height: 70px;
+    padding: 5px;
+  }
+
+  .page-dashboard .trade-extremes strong,
+  .page-auto-trade .trade-extremes strong {
+    font-size: 8.5px;
+  }
+
+  .page-dashboard .trade-extremes span,
+  .page-dashboard .trade-extremes small,
+  .page-auto-trade .trade-extremes span,
+  .page-auto-trade .trade-extremes small {
+    font-size: 6px;
+  }
+
+  .page-dashboard .signal-filters,
+  .page-auto-trade .signal-filters,
+  .page-auto-trade .portfolio-trade-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-dashboard .strategy-scorecards,
+  .page-auto-trade .strategy-scorecards,
+  .page-auto-trade .public-strategy-grid,
+  .page-auto-trade .admin-strategy-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .page-dashboard .scorecard,
+  .page-dashboard .strategy-scorecards article,
+  .page-dashboard .strategy-scorecards button,
+  .page-auto-trade .scorecard,
+  .page-auto-trade .strategy-scorecards article,
+  .page-auto-trade .strategy-scorecards button,
+  .page-auto-trade .public-strategy-card,
+  .page-auto-trade .admin-strategy-card {
+    min-height: 108px;
+    padding: 5px;
+  }
+
+  .page-dashboard .scorecard strong,
+  .page-auto-trade .scorecard strong,
+  .page-auto-trade .public-strategy-card strong,
+  .page-auto-trade .admin-strategy-card strong {
+    font-size: 9px;
+  }
+
+  .page-dashboard .scorecard small,
+  .page-dashboard .scorecard-caption,
+  .page-dashboard .scorecard-score,
+  .page-auto-trade .scorecard small,
+  .page-auto-trade .public-strategy-card span,
+  .page-auto-trade .public-strategy-card small,
+  .page-auto-trade .admin-strategy-card span {
+    font-size: 5.8px;
+  }
+
+  .page-dashboard .command-summary,
+  .page-auto-trade .command-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+  }
+}
+
 /* Center Auto Trading login on mobile */
 @media (max-width: 820px) {
   .page-auto-trade .auto-trade-page:has(.auto-auth-shell) {
@@ -11668,5 +12101,67 @@ video {
 
   .page-auto-trade .auto-auth-shell {
     min-height: calc(100svh - 128px);
+  }
+}
+
+/* Last-word overrides for compact production mobile layout */
+@media (max-width: 820px) {
+  .notification-settings {
+    padding: 0;
+  }
+
+  .notification-settings-trigger {
+    width: 100%;
+    min-height: 36px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 7px;
+    padding: 0 8px;
+  }
+
+  .notification-settings-title {
+    min-width: 0;
+  }
+
+  .notification-settings-title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-auto-trade .public-ops-panel {
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-auto-trade .public-ops-body,
+  .page-auto-trade .public-strategies-card {
+    min-width: 0;
+  }
+
+  .page-auto-trade .public-strategy-grid,
+  .page-auto-trade .admin-strategy-grid,
+  .page-dashboard .strategy-scorecards {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom,
+  .page-auto-trade .trade-extremes-row-top,
+  .page-auto-trade .trade-extremes-row-bottom,
+  .page-auto-trade .portfolio-ledger-meta-row {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .page-dashboard .signal-filters,
+  .page-auto-trade .signal-filters,
+  .page-auto-trade .portfolio-trade-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-dashboard .command-summary,
+  .page-auto-trade .command-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
