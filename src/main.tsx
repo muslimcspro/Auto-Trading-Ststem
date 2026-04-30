@@ -969,28 +969,29 @@ function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; on
     if (!trade) return;
     let cancelled = false;
     const key = `${trade.market}:${trade.symbol}:${trade.timeframe}`;
-    const cached = tradeChartCache.get(key);
-    if (cached) {
-      setCandles(cached);
+    const fetchLiveCandles = (initial = false) => {
+      if (initial) setLoading(true);
       setError('');
-      return;
-    }
-    setLoading(true);
-    setError('');
-    api<{ ok: boolean; candles: ChartCandle[] }>(`/api/chart?symbol=${encodeURIComponent(trade.symbol)}&market=${trade.market}&interval=${trade.timeframe}&limit=240`)
-      .then(response => {
-        if (cancelled) return;
-        tradeChartCache.set(key, response.candles);
-        setCandles(response.candles);
-      })
-      .catch(() => {
-        if (!cancelled) setError('Unable to load chart candles.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      api<{ ok: boolean; candles: ChartCandle[] }>(`/api/chart?symbol=${encodeURIComponent(trade.symbol)}&market=${trade.market}&interval=${trade.timeframe}&limit=240&ts=${Date.now()}`)
+        .then(response => {
+          if (cancelled) return;
+          tradeChartCache.set(key, response.candles);
+          setCandles(response.candles);
+        })
+        .catch(() => {
+          if (!cancelled) setError('Unable to load live chart candles.');
+        })
+        .finally(() => {
+          if (!cancelled && initial) setLoading(false);
+        });
+    };
+    const cached = tradeChartCache.get(key);
+    if (cached) setCandles(cached);
+    fetchLiveCandles(!cached);
+    const intervalId = window.setInterval(() => fetchLiveCandles(false), 10000);
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [trade]);
 
@@ -1050,11 +1051,22 @@ function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; on
         lineWidth: isPrimaryLine(name) ? 2 : 1,
         lineStyle: LineStyle.Solid,
         color: isPrimaryLine(name) ? color : color.replace('1)', '0.58)'),
-        axisLabelVisible: isPrimaryLine(name)
+        axisLabelVisible: true
       });
-      series.createPriceLine({ price: levels.entry, ...lineOptions('entry', 'rgba(56, 189, 248, 1)'), title: 'Entry' });
-      series.createPriceLine({ price: levels.takeProfit, ...lineOptions('takeProfit', 'rgba(8, 153, 129, 1)'), title: 'TP' });
-      series.createPriceLine({ price: levels.stopLoss, ...lineOptions('stopLoss', 'rgba(242, 54, 69, 1)'), title: 'SL' });
+      series.createPriceLine({ price: levels.entry, ...lineOptions('entry', 'rgba(56, 189, 248, 1)'), title: `Entry ${fmt(levels.entry)}` });
+      series.createPriceLine({ price: levels.takeProfit, ...lineOptions('takeProfit', 'rgba(8, 153, 129, 1)'), title: `TP ${fmt(levels.takeProfit)}` });
+      series.createPriceLine({ price: levels.stopLoss, ...lineOptions('stopLoss', 'rgba(242, 54, 69, 1)'), title: `SL ${fmt(levels.stopLoss)}` });
+      const liveClose = candles[candles.length - 1]?.close;
+      if (typeof liveClose === 'number') {
+        series.createPriceLine({
+          price: liveClose,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          color: 'rgba(209, 212, 220, 0.46)',
+          axisLabelVisible: true,
+          title: `Live ${fmt(liveClose)}`
+        });
+      }
       chart.timeScale().fitContent();
       resizeObserver = new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth, height: container.clientHeight }));
       resizeObserver.observe(container);
@@ -6321,6 +6333,16 @@ function PerformanceCharts({
     'Performance Leaders': false,
     'Direction Leaders': false
   });
+  const [activeChartRow, setActiveChartRow] = useState<null | (Stat & {
+    winLong: number;
+    winShort: number;
+    lossLong: number;
+    lossShort: number;
+    openLong: number;
+    openShort: number;
+    closedTrades: number;
+    score: number;
+  })>(null);
   const riskMap = new Map(stats.map(stat => [stat.strategyId, stat.risk]));
   const groupedRows = new Map<string, {
     strategyId: string;
@@ -6477,12 +6499,32 @@ function PerformanceCharts({
         <h3>Strategy Wins / Losses / Open</h3>
         <div className="chart">
           {chartRows.length === 0 ? <div className="chart-empty-state">No strategy chart data in this range.</div> : <div className="strategy-bars-canvas">
-            <div className="strategy-bars-plot" role="img" aria-label="Strategy wins losses and open trades">
-              {chartRows.map(row => <div key={row.strategyId} className="strategy-bars-group" title={`${row.name}: ${row.wins} wins, ${row.losses} losses, ${row.live} open`}>
+            <div className="strategy-bars-plot" role="img" aria-label="Strategy wins losses and open trades" onPointerLeave={() => setActiveChartRow(null)}>
+              {chartRows.map(row => <button
+                key={row.strategyId}
+                type="button"
+                className={`strategy-bars-group${activeChartRow?.strategyId === row.strategyId ? ' active' : ''}`}
+                title={`${row.name}: ${row.wins} wins, ${row.losses} losses, ${row.live} open`}
+                onPointerEnter={() => setActiveChartRow(row)}
+                onPointerMove={() => setActiveChartRow(row)}
+                onFocus={() => setActiveChartRow(row)}
+                onBlur={() => setActiveChartRow(null)}
+              >
                 <span className="strategy-bar win" style={{ height: getStrategyBarHeight(row.wins) }}><i>{row.wins}</i></span>
                 <span className="strategy-bar loss" style={{ height: getStrategyBarHeight(row.losses) }}><i>{row.losses}</i></span>
                 <span className="strategy-bar open" style={{ height: getStrategyBarHeight(row.live) }}><i>{row.live}</i></span>
-              </div>)}
+              </button>)}
+              {activeChartRow && <div className="strategy-chart-popover" role="status">
+                <strong>{activeChartRow.name}</strong>
+                <span><RiskBadge risk={activeChartRow.risk} compact /> <b>{activeChartRow.total}</b> total | {activeChartRow.winRate}% WR</span>
+                <div>
+                  <small>Wins <b className="good">{activeChartRow.wins}</b></small>
+                  <small>Losses <b className="bad">{activeChartRow.losses}</b></small>
+                  <small>Open <b>{activeChartRow.live}</b></small>
+                  <small>Score <b>{activeChartRow.score.toFixed(1)}</b></small>
+                </div>
+                <p>Long {activeChartRow.winLong}/{activeChartRow.lossLong}/{activeChartRow.openLong} | Short {activeChartRow.winShort}/{activeChartRow.lossShort}/{activeChartRow.openShort}</p>
+              </div>}
             </div>
             <div className="strategy-chart-legend" aria-hidden="true">
               <span><i className="win" />Wins</span>
