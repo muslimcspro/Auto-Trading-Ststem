@@ -10166,3 +10166,764 @@ video {
     line-height: 1.2;
   }
 }
+
+/* Dashboard mobile desktop-parity pass */
+@media (min-width: 821px) {
+  .page-dashboard,
+  .page-dashboard .dashboard-hero,
+  .page-dashboard .performance-command,
+  .page-dashboard .performance-charts,
+  .page-dashboard .ledger-wrap {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .page-dashboard {
+    padding: 6px;
+  }
+
+  .page-dashboard .dashboard-hero,
+  .page-dashboard .performance-command,
+  .page-dashboard .performance-charts,
+  .page-dashboard .ledger-wrap {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding: 10px;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .dashboard-heading-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .page-dashboard .dashboard-heading-copy h1 {
+    font-size: clamp(28px, 8.5vw, 38px);
+    line-height: .95;
+  }
+
+  .page-dashboard .dashboard-heading-row .home-market-switch {
+    width: auto;
+    max-width: 168px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .page-dashboard .dashboard-heading-row .home-market-switch button {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .performance-command-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(158px, auto);
+    align-items: start;
+    gap: 8px;
+  }
+
+  .page-dashboard .dashboard-section-title h2,
+  .page-dashboard .section-title h2,
+  .page-dashboard .performance-chart-title h2 {
+    font-size: clamp(16px, 4.8vw, 22px);
+    line-height: 1.05;
+  }
+
+  .page-dashboard .dashboard-command-filter,
+  .page-dashboard .dashboard-command-filter.in-command,
+  .page-dashboard .ledger-range-filter {
+    width: auto;
+    max-width: 100%;
+    min-width: 0;
+    margin-left: 0;
+    justify-items: end;
+    gap: 5px;
+  }
+
+  .page-dashboard .dashboard-range-label {
+    min-height: 22px;
+    padding: 0 7px;
+    font-size: 8px;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .range-pills {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .page-dashboard .range-pills::-webkit-scrollbar {
+    display: none;
+  }
+
+  .page-dashboard .range-pills button {
+    flex: 0 0 auto;
+    min-height: 24px;
+    padding: 0 7px;
+    font-size: 8.5px;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .range-retention-note,
+  .page-dashboard .ledger-range-filter p {
+    max-width: 175px;
+    overflow: hidden;
+    font-size: 8px;
+    line-height: 1.25;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .strategy-scorecards {
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    gap: 6px;
+  }
+
+  .page-dashboard .strategy-scorecard,
+  .page-dashboard .strategy-scorecards article {
+    min-width: 0;
+    padding: 8px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .command-summary {
+    grid-template-columns: 1.35fr repeat(7, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .page-dashboard .command-summary article {
+    min-width: 0;
+    min-height: 70px;
+    padding: 7px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .command-summary span,
+  .page-dashboard .command-summary small {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 6.5px;
+    line-height: 1.15;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .page-dashboard .command-summary strong {
+    display: block;
+    overflow: hidden;
+    font-size: clamp(10px, 3.2vw, 15px);
+    line-height: 1.05;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .performance-chart-topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+  }
+
+  .page-dashboard .performance-toolbar {
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  .page-dashboard .leader-sections {
+    gap: 7px;
+  }
+
+  .page-dashboard .leader-toggle {
+    min-height: 46px;
+    padding: 8px 10px;
+    border-radius: 12px;
+  }
+
+  .page-dashboard .leader-toggle h3 {
+    font-size: 9px;
+    letter-spacing: .06em;
+  }
+
+  .page-dashboard .leader-toggle-copy small {
+    font-size: 8px;
+  }
+
+  .page-dashboard .leader-list {
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 6px;
+  }
+
+  .page-dashboard .leader-item {
+    min-width: 0;
+    padding: 8px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .leader-copy span,
+  .page-dashboard .leader-stats small {
+    font-size: 6.5px;
+  }
+
+  .page-dashboard .leader-copy strong {
+    font-size: clamp(16px, 5vw, 22px);
+    letter-spacing: 0;
+  }
+
+  .page-dashboard .leader-copy h4 {
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .leader-copy small {
+    font-size: 7px;
+    line-height: 1.25;
+  }
+
+  .page-dashboard .chart-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .page-dashboard .chart-block.wide {
+    grid-column: 1 / -1;
+  }
+
+  .page-dashboard .chart-block h3 {
+    font-size: 12px;
+  }
+
+  .page-dashboard .chart {
+    min-height: 220px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .chart .recharts-wrapper,
+  .page-dashboard .chart .recharts-surface {
+    max-width: 100%;
+  }
+
+  .page-dashboard .performance-chart-summary {
+    gap: 6px;
+    font-size: 8px;
+  }
+
+  .page-dashboard .performance-chart-summary b {
+    font-size: 9px;
+  }
+
+  .page-dashboard .trade-extremes {
+    gap: 6px;
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+    overflow: visible;
+  }
+
+  .page-dashboard .trade-extreme-card {
+    min-width: 0;
+    min-height: 64px;
+    padding: 7px;
+    border-radius: 11px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .trade-extremes span,
+  .page-dashboard .trade-extremes small {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 6.5px;
+    line-height: 1.15;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .page-dashboard .trade-extremes strong {
+    display: block;
+    overflow: hidden;
+    font-size: clamp(10px, 3vw, 14px);
+    line-height: 1.05;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .signal-filters {
+    gap: 6px;
+  }
+
+  .page-dashboard .signal-filters > div {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 5px;
+    border-radius: 11px;
+    scrollbar-width: none;
+  }
+
+  .page-dashboard .signal-filters > div::-webkit-scrollbar {
+    display: none;
+  }
+
+  .page-dashboard .signal-filters span,
+  .page-dashboard .signal-filters button {
+    flex: 0 0 auto;
+    font-size: 8px;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .signal-filters button {
+    min-height: 24px;
+    padding: 0 7px;
+    border-radius: 9px;
+  }
+
+  .page-dashboard .trade-ledger-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    padding: 8px;
+  }
+
+  .page-dashboard .trade-ledger-search,
+  .page-dashboard .ledger-search-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .page-dashboard .ledger-search-input {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    min-height: 34px;
+    padding: 0 8px;
+  }
+
+  .page-dashboard .ledger-search-input input {
+    min-width: 0;
+    font-size: 11px;
+  }
+
+  .page-dashboard .ledger-search-clear {
+    grid-column: auto;
+    min-height: 24px;
+    padding: 0 8px;
+    font-size: 9px;
+  }
+
+  .page-dashboard .trade-ledger-shell {
+    border-radius: 14px;
+  }
+
+  .page-dashboard .trade-ledger-scroll {
+    width: 100%;
+    max-width: 100%;
+    height: 300px;
+    max-height: 300px;
+    overflow-x: auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-dashboard .trade-ledger {
+    min-width: 1180px;
+    table-layout: fixed;
+  }
+
+  .page-dashboard .trade-ledger th,
+  .page-dashboard .trade-ledger td {
+    padding: 8px 9px;
+    font-size: 10px;
+  }
+
+  .page-dashboard .trade-ledger th {
+    font-size: 8px;
+  }
+
+  .page-dashboard .ledger-score,
+  .page-dashboard .ledger-pnl-value,
+  .page-dashboard .ledger-venue-cell strong {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 430px) {
+  .page-dashboard .dashboard-hero,
+  .page-dashboard .performance-command,
+  .page-dashboard .performance-charts,
+  .page-dashboard .ledger-wrap {
+    padding: 8px;
+  }
+
+  .page-dashboard .performance-command-head,
+  .page-dashboard .performance-chart-topbar {
+    grid-template-columns: minmax(0, 1fr) minmax(128px, auto);
+  }
+
+  .page-dashboard .command-summary {
+    grid-template-columns: 1.2fr repeat(7, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .page-dashboard .command-summary article {
+    min-height: 62px;
+    padding: 6px;
+  }
+
+  .page-dashboard .command-summary strong {
+    font-size: clamp(8px, 2.65vw, 12px);
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .page-dashboard .trade-extreme-card {
+    min-height: 58px;
+    padding: 6px;
+  }
+
+  .page-dashboard .trade-extremes strong {
+    font-size: clamp(8px, 2.6vw, 12px);
+  }
+
+  .page-dashboard .chart {
+    min-height: 200px;
+  }
+
+  .page-dashboard .range-retention-note,
+  .page-dashboard .ledger-range-filter p {
+    max-width: 130px;
+  }
+}
+
+/* Dashboard readable mobile correction */
+@media (max-width: 820px) {
+  .page-dashboard .dashboard-heading-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .page-dashboard .dashboard-heading-copy h1 {
+    font-size: clamp(26px, 8vw, 36px);
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .dashboard-heading-row .home-market-switch {
+    max-width: 172px;
+  }
+
+  .page-dashboard .dashboard-heading-row .home-market-switch button {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 8px;
+  }
+
+  .page-dashboard .performance-command-head,
+  .page-dashboard .performance-chart-topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .page-dashboard .performance-command-head h2,
+  .page-dashboard .performance-chart-title h2 {
+    max-width: none;
+    font-size: 20px;
+    line-height: 1.05;
+  }
+
+  .page-dashboard .dashboard-command-filter,
+  .page-dashboard .dashboard-command-filter.in-command,
+  .page-dashboard .performance-toolbar,
+  .page-dashboard .ledger-range-filter {
+    width: 100%;
+    justify-items: start;
+    margin-left: 0;
+  }
+
+  .page-dashboard .range-pills {
+    width: 100%;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 5px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .page-dashboard .range-pills button {
+    min-height: 26px;
+    padding: 0 8px;
+    font-size: 9px;
+  }
+
+  .page-dashboard .range-retention-note,
+  .page-dashboard .ledger-range-filter p {
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+    font-size: 8px;
+  }
+
+  .page-dashboard .strategy-scorecards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .page-dashboard .scorecard,
+  .page-dashboard .strategy-scorecards article,
+  .page-dashboard .strategy-scorecards button {
+    min-height: 174px;
+    padding: 12px;
+    gap: 8px;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .scorecard strong {
+    font-size: 18px;
+    line-height: 1.05;
+    letter-spacing: 0;
+    white-space: normal;
+    overflow-wrap: normal;
+  }
+
+  .page-dashboard .scorecard small,
+  .page-dashboard .scorecard-caption,
+  .page-dashboard .scorecard-score {
+    font-size: 10px;
+    line-height: 1.35;
+    white-space: normal;
+  }
+
+  .page-dashboard .scorecard-topline {
+    gap: 6px;
+  }
+
+  .page-dashboard .risk-badge,
+  .page-dashboard .strategy-switch {
+    flex: 0 0 auto;
+    padding: 4px 7px;
+    font-size: 8px;
+    line-height: 1;
+  }
+
+  .page-dashboard .command-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .page-dashboard .command-summary article {
+    min-height: 86px;
+    padding: 9px;
+  }
+
+  .page-dashboard .command-summary .selected-brief {
+    grid-column: span 2;
+  }
+
+  .page-dashboard .command-summary span,
+  .page-dashboard .command-summary small {
+    font-size: 8px;
+    line-height: 1.25;
+  }
+
+  .page-dashboard .command-summary strong {
+    font-size: 15px;
+    white-space: normal;
+    line-height: 1.1;
+  }
+
+  .page-dashboard .dashboard-notifications-panel {
+    padding: 10px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .dashboard-notifications-panel h2 {
+    font-size: 20px;
+  }
+
+  .page-dashboard .notifications {
+    grid-auto-rows: 76px;
+    height: 248px;
+    max-height: 248px;
+    gap: 8px;
+  }
+
+  .page-dashboard .notification-card {
+    height: 76px;
+    grid-template-columns: 20px minmax(0, 1fr);
+    gap: 7px;
+    padding: 7px;
+  }
+
+  .page-dashboard .notification-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: start;
+  }
+
+  .page-dashboard .notification-head strong {
+    font-size: 12px;
+    line-height: 1.1;
+    white-space: normal;
+  }
+
+  .page-dashboard .notification-meta {
+    gap: 5px;
+  }
+
+  .page-dashboard .notifications small {
+    font-size: 8px;
+  }
+
+  .page-dashboard .notification-compact-line {
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .page-dashboard .notification-compact-line b {
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.1;
+    white-space: normal;
+  }
+
+  .page-dashboard .notification-compact-line .side-badge {
+    flex: 0 0 auto;
+    font-size: 8px;
+    padding: 3px 6px;
+  }
+
+  .page-dashboard .leader-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-dashboard .chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-dashboard .chart-block.wide {
+    grid-column: auto;
+  }
+
+  .page-dashboard .chart {
+    min-height: 260px;
+  }
+
+  .page-dashboard .performance-chart-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 8px;
+    font-size: 8px;
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .page-dashboard .trade-extreme-card {
+    min-height: 82px;
+    padding: 9px;
+  }
+
+  .page-dashboard .trade-extremes span,
+  .page-dashboard .trade-extremes small {
+    font-size: 8px;
+    line-height: 1.25;
+  }
+
+  .page-dashboard .trade-extremes strong {
+    font-size: 14px;
+    white-space: normal;
+  }
+
+  .page-dashboard .signal-filters {
+    display: grid;
+    gap: 7px;
+  }
+
+  .page-dashboard .signal-filters > div {
+    padding: 7px;
+    gap: 5px;
+    border-radius: 12px;
+  }
+
+  .page-dashboard .signal-filters span,
+  .page-dashboard .signal-filters button {
+    font-size: 8px;
+  }
+
+  .page-dashboard .signal-filters button {
+    min-height: 26px;
+    padding: 0 8px;
+  }
+}
+
+@media (max-width: 430px) {
+  .page-dashboard .dashboard-heading-copy h1 {
+    font-size: 30px;
+  }
+
+  .page-dashboard .dashboard-heading-row .home-market-switch {
+    max-width: 178px;
+  }
+
+  .page-dashboard .strategy-scorecards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-dashboard .scorecard,
+  .page-dashboard .strategy-scorecards article,
+  .page-dashboard .strategy-scorecards button {
+    min-height: 166px;
+    padding: 10px;
+  }
+
+  .page-dashboard .scorecard strong {
+    font-size: 17px;
+  }
+
+  .page-dashboard .scorecard small,
+  .page-dashboard .scorecard-caption,
+  .page-dashboard .scorecard-score {
+    font-size: 9px;
+  }
+
+  .page-dashboard .command-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
