@@ -12800,7 +12800,25 @@ video {
 
   .strategy-bars-canvas {
     min-width: 340px;
-    width: max-content;
+    width: 100%;
+  }
+
+  .strategy-bars-plot {
+    grid-auto-columns: minmax(38px, 1fr);
+    gap: 7px;
+    height: 286px;
+    padding: 16px 5px 10px;
+  }
+
+  .strategy-bars-group {
+    gap: 3px;
+  }
+
+  .strategy-chart-legend {
+    justify-content: flex-start;
+    gap: 9px;
+    font-size: 9px;
+    overflow: hidden;
   }
 
   .page-auto-trade .live-rules-panel-grid,
@@ -14238,6 +14256,86 @@ video {
   min-width: 0;
 }
 
+.strategy-bars-plot {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(44px, 1fr);
+  align-items: end;
+  gap: 10px;
+  width: 100%;
+  height: 300px;
+  padding: 18px 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background:
+    linear-gradient(to top, color-mix(in srgb, var(--border) 38%, transparent) 1px, transparent 1px) 0 0 / 100% 25%;
+}
+
+.strategy-bars-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(7px, 1fr));
+  align-items: end;
+  gap: 4px;
+  height: 100%;
+  min-width: 0;
+}
+
+.strategy-bar {
+  position: relative;
+  display: block;
+  min-height: 0;
+  border-radius: 5px 5px 2px 2px;
+  box-shadow: 0 0 14px color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.strategy-bar.win { color: #2fbf71; background: #2fbf71; }
+.strategy-bar.loss { color: #d85b63; background: #d85b63; }
+.strategy-bar.open { color: #c9a45c; background: #c9a45c; }
+
+.strategy-bar i {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 3px);
+  color: var(--soft-text);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity .14s ease;
+}
+
+.strategy-bars-group:hover .strategy-bar i,
+.strategy-bars-group:focus-within .strategy-bar i {
+  opacity: 1;
+}
+
+.strategy-chart-legend {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.strategy-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.strategy-chart-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.strategy-chart-legend .win { background: #2fbf71; }
+.strategy-chart-legend .loss { background: #d85b63; }
+.strategy-chart-legend .open { background: #c9a45c; }
+
 .performance-command .chart,
 .performance-command .chart-block.wide {
   width: 100%;
@@ -14353,5 +14451,225 @@ video {
     min-width: 38px;
     min-height: 20px;
     padding: 0 6px;
+  }
+}
+
+/* Dashboard chart, ledger modal, and public strategy final fit */
+.page-dashboard .performance-command .chart {
+  width: 100%;
+  min-width: 0;
+  min-height: clamp(280px, 34vw, 380px);
+  overflow: hidden;
+}
+
+.page-dashboard .strategy-bars-canvas {
+  display: grid;
+  width: 100%;
+  min-width: 0 !important;
+}
+
+.page-dashboard .strategy-bars-plot {
+  grid-auto-columns: minmax(18px, 1fr);
+  min-width: 0;
+  height: clamp(230px, 30vw, 320px);
+  gap: clamp(4px, 1vw, 10px);
+  padding-inline: clamp(4px, 1vw, 10px);
+}
+
+.page-dashboard .strategy-bars-group {
+  grid-template-columns: repeat(3, minmax(3px, 1fr));
+  gap: clamp(2px, .45vw, 5px);
+}
+
+.page-dashboard .strategy-bar {
+  min-height: 2px;
+}
+
+.trade-chart-levels span {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: center;
+  justify-content: stretch;
+  gap: 5px;
+  min-width: 0;
+}
+
+.trade-chart-levels em {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-style: normal;
+  font-size: clamp(14px, 1.25vw, 18px);
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-chart-canvas {
+  min-width: 0;
+}
+
+.page-auto-trade .public-strategy-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.page-auto-trade .public-strategy-card,
+.page-auto-trade .public-strategy-card.lab > button:first-child {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "name state"
+    "wr score"
+    "line line";
+  align-items: center;
+  gap: 10px 12px;
+  min-width: 0;
+  min-height: 118px;
+  padding: 14px;
+  text-align: left;
+}
+
+.page-auto-trade .public-strategy-card.lab {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.page-auto-trade .public-strategy-card strong {
+  grid-area: name;
+  font-size: 15px;
+  line-height: 1.15;
+  -webkit-line-clamp: 2;
+}
+
+.page-auto-trade .public-strategy-card small {
+  min-width: 0;
+  color: var(--soft-text);
+  font-size: 12px;
+  line-height: 1.1;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.page-auto-trade .public-strategy-card small:first-of-type {
+  grid-area: wr;
+}
+
+.page-auto-trade .public-strategy-card small:nth-of-type(2) {
+  grid-area: score;
+  justify-self: end;
+}
+
+.page-auto-trade .public-strategy-card .scoreline {
+  grid-area: line;
+  display: block;
+  width: 100%;
+  height: 7px;
+  margin: 0;
+}
+
+.page-auto-trade .public-strategy-card b {
+  grid-area: state;
+  width: auto;
+  min-width: 46px;
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+@media (max-width: 820px) {
+  .page-dashboard .performance-command .chart {
+    min-height: 276px;
+    overflow: hidden;
+  }
+
+  .page-dashboard .strategy-bars-plot {
+    grid-auto-columns: minmax(8px, 1fr);
+    height: 230px;
+    gap: 3px;
+    padding: 14px 3px 10px;
+  }
+
+  .page-dashboard .strategy-bar i {
+    display: none;
+  }
+
+  .trade-chart-overlay {
+    align-items: start;
+    padding: 12px;
+    overflow: auto;
+  }
+
+  .trade-chart-modal {
+    width: 100%;
+    max-height: none;
+    gap: 12px;
+    padding: 16px;
+    overflow: visible;
+  }
+
+  .trade-chart-head {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .trade-chart-head h3 {
+    font-size: clamp(24px, 8vw, 34px);
+    line-height: 1.05;
+    overflow-wrap: anywhere;
+  }
+
+  .trade-chart-status {
+    justify-content: start;
+  }
+
+  .trade-chart-levels {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .trade-chart-levels span {
+    min-height: 62px;
+    padding: 9px;
+  }
+
+  .trade-chart-levels em {
+    font-size: clamp(12px, 3.4vw, 15px);
+  }
+
+  .trade-chart-canvas {
+    min-height: 420px;
+  }
+
+  .page-auto-trade .public-strategy-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .page-auto-trade .public-strategy-card,
+  .page-auto-trade .public-strategy-card.lab > button:first-child {
+    min-height: 112px;
+    padding: 10px;
+    gap: 7px;
+  }
+
+  .page-auto-trade .public-strategy-card strong {
+    font-size: 12px;
+  }
+
+  .page-auto-trade .public-strategy-card small {
+    font-size: 9px;
+  }
+
+  .page-auto-trade .public-strategy-card b {
+    min-width: 40px;
+    min-height: 22px;
+    padding: 0 7px;
+    font-size: 9px;
   }
 }
