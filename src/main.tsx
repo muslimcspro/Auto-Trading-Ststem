@@ -728,7 +728,7 @@ function App() {
   };
 
   const shell = (
-    <div className="app-shell">
+    <div className={`app-shell${chartOpen ? ' chart-open' : ''}`}>
       <header className="shell-header">
         <div className="shell-brand" aria-label="Auto Trading System">
           <span className="shell-brand-mark"><TrendingUp size={20} /></span>

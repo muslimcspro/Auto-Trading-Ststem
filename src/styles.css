@@ -10005,3 +10005,164 @@ video {
     max-width: 100% !important;
   }
 }
+/* Requested mobile refinements */
+@media (max-width: 820px) {
+  .home-launchpad-copy,
+  .home-launchpad-copy h1,
+  .home-launchpad-summary {
+    text-align: center;
+    justify-items: center;
+    margin-inline: auto;
+  }
+
+  .home-cta-row {
+    justify-content: center;
+  }
+
+  .shell-tools {
+    order: 1;
+  }
+
+  .shell-nav {
+    order: 2;
+  }
+
+  .home-live-board-head,
+  .home-leader-shell > .home-live-board-head {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .home-live-board-head > div:first-child,
+  .home-leader-shell > .home-live-board-head > div:first-child {
+    min-width: 0;
+  }
+
+  .home-live-board-head .home-market-switch,
+  .home-leader-head-tools .home-market-switch {
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .home-leader-head-tools {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .home-leader-source-links,
+  .home-marketcap-shell .home-news-badge,
+  .home-news-shell .home-news-badge {
+    display: none;
+  }
+
+  .app-shell.chart-open .shell-header {
+    display: none;
+  }
+
+  .chart-modal-backdrop {
+    padding: 8px;
+  }
+
+  .chart-modal {
+    margin-top: 0;
+  }
+
+  .chart-modal-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .chart-modal-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    justify-items: stretch;
+  }
+
+  .chart-toolbar-group {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .chart-modal-actions .access-filter-pills {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    scrollbar-width: none;
+  }
+
+  .chart-modal-actions .access-filter-pills::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chart-modal-actions .access-filter-pills button {
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 0 10px;
+    font-size: 10px;
+  }
+
+  .chart-modal-actions .ghost {
+    width: auto;
+    min-height: 28px;
+    padding: 0 12px;
+    border-radius: 999px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 520px) {
+  .home-launchpad-copy h1,
+  .home-launchpad-summary {
+    width: 100%;
+    text-align: center;
+  }
+
+  .home-live-board-head h2,
+  .home-leader-shell .home-live-board-head h2 {
+    font-size: 15px;
+  }
+
+  .home-live-board-head .eyebrow {
+    font-size: 8px;
+  }
+
+  .home-live-board-head .home-market-switch,
+  .home-leader-head-tools .home-market-switch {
+    max-width: 122px;
+  }
+
+  .home-live-board-head .home-market-switch button,
+  .home-leader-head-tools .home-market-switch button {
+    min-height: 24px;
+    padding: 0 7px;
+    font-size: 9px;
+  }
+
+  .chart-modal-head > div:first-child {
+    gap: 3px;
+  }
+
+  .chart-modal-head span {
+    font-size: 9px;
+  }
+
+  .chart-modal-head strong {
+    font-size: 23px;
+  }
+
+  .chart-modal-head small {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+}
