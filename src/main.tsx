@@ -6063,15 +6063,14 @@ function PerformanceChart({
         <span>Portfolio</span>
         <strong>All Strategies</strong>
         <div className="scoreline"><i style={{ width: `${Math.min(100, rangedPortfolioTotals.total * 6)}%` }} /></div>
-        <small>{rangedPortfolioTotals.total} trades across {insightRows.length || stats.length} strategies</small>
+        <small>{rangedPortfolioTotals.total} trades</small>
       </button>
       {insightRows.map(item => <button key={item.strategyId} className={selectedStrategyId === item.strategyId ? 'scorecard active' : 'scorecard'} onClick={() => setSelectedStrategyId(item.strategyId)}>
         <div className="scorecard-topline"><RiskBadge risk={item.risk} /><span className={selected?.has(item.strategyId) ? 'strategy-switch on' : 'strategy-switch off'}>{selected?.has(item.strategyId) ? 'ON' : 'OFF'}</span></div>
         <strong>{item.name}</strong>
-        <small className="scorecard-caption">{`${item.winRate.toFixed(0)}% win rate across ${item.closed} closed trades`}</small>
+        <small className="scorecard-caption">{`${item.winRate.toFixed(0)}% WR`}</small>
         <small className="scorecard-score">{`${item.score.toFixed(1)} score`}</small>
         <div className="scoreline"><i style={{ width: `${item.winRate || Math.min(100, item.total * 8)}%` }} /></div>
-        <small>{item.total} trades | {item.open} open | {item.winRate.toFixed(0)}% WR</small>
       </button>)}
     </div>}
 
@@ -6462,8 +6461,8 @@ function PerformanceCharts({
           {chartRows.length === 0 ? <div className="chart-empty-state">No strategy chart data in this range.</div> : <div className="strategy-bars-canvas">
             <BarChart width={strategyChartWidth} height={300} data={chartRows}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={{ stroke: 'var(--border)' }} tickLine={{ stroke: 'var(--border)' }} />
-              <YAxis tick={{ fill: 'var(--muted)' }} axisLine={{ stroke: 'var(--border)' }} tickLine={{ stroke: 'var(--border)' }} />
+              <XAxis dataKey="name" tick={false} axisLine={false} tickLine={false} height={8} />
+              <YAxis tick={false} axisLine={false} tickLine={false} width={8} />
               <Tooltip content={<StrategyChartTooltip />} cursor={{ fill: 'var(--hover)' }} />
               <Bar dataKey="wins" fill="#2fbf71" stroke="#2fbf71" fillOpacity={1} isAnimationActive={false} name="Wins" radius={[4, 4, 0, 0]} maxBarSize={28} />
               <Bar dataKey="losses" fill="#d85b63" stroke="#d85b63" fillOpacity={1} isAnimationActive={false} name="Losses" radius={[4, 4, 0, 0]} maxBarSize={28} />
