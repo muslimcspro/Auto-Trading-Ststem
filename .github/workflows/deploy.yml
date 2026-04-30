@@ -14,6 +14,8 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     env:
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      SECRETS_MASTER_KEY: ${{ secrets.SECRETS_MASTER_KEY }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_PORT: ${{ secrets.VPS_PORT }}
       VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
@@ -50,11 +52,24 @@ jobs:
       - name: Deploy on VPS
         run: |
           set -euo pipefail
+          : "${ADMIN_PASSWORD:?ADMIN_PASSWORD secret is required}"
+          : "${SECRETS_MASTER_KEY:?SECRETS_MASTER_KEY secret is required}"
           PORT="${VPS_PORT:-22}"
-          ssh -p "$PORT" -i ~/.ssh/trading71_vps "$VPS_USER@$VPS_HOST" <<'EOF'
-            set -euo pipefail
-            cd /opt/trading71
-            git pull --ff-only
-            docker compose -f docker-compose.oracle.yml up -d --build
-            docker compose -f docker-compose.oracle.yml ps
+          ADMIN_PASSWORD_B64="$(printf '%s' "$ADMIN_PASSWORD" | base64 -w0)"
+          SECRETS_MASTER_KEY_B64="$(printf '%s' "$SECRETS_MASTER_KEY" | base64 -w0)"
+          ssh -p "$PORT" -i ~/.ssh/trading71_vps "$VPS_USER@$VPS_HOST" \
+            "ADMIN_PASSWORD_B64='$ADMIN_PASSWORD_B64' SECRETS_MASTER_KEY_B64='$SECRETS_MASTER_KEY_B64' bash -s" <<'EOF'
+          set -euo pipefail
+          cd /opt/trading71
+          git pull --ff-only
+          ADMIN_PASSWORD="$(printf '%s' "$ADMIN_PASSWORD_B64" | base64 -d)"
+          SECRETS_MASTER_KEY="$(printf '%s' "$SECRETS_MASTER_KEY_B64" | base64 -d)"
+          touch .env
+          tmp_env="$(mktemp)"
+          grep -v -E '^(ADMIN_PASSWORD|SECRETS_MASTER_KEY)=' .env > "$tmp_env" || true
+          printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD" >> "$tmp_env"
+          printf 'SECRETS_MASTER_KEY=%s\n' "$SECRETS_MASTER_KEY" >> "$tmp_env"
+          mv "$tmp_env" .env
+          docker compose -f docker-compose.oracle.yml up -d --build
+          docker compose -f docker-compose.oracle.yml ps
           EOF

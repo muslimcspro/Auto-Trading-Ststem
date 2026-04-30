@@ -84,11 +84,11 @@ type TradeChartTrade = {
   pnlLabel?: string;
 };
 type AccessRequest = {
-  id: number;
+  id: string;
   userId: string;
   name: string;
   username: string;
-  password: string;
+  password?: string;
   email: string;
   telegram: string;
   phone: string;
@@ -96,6 +96,10 @@ type AccessRequest = {
   enabled: boolean;
   approvedAt?: number;
   telegramNotificationsEnabled: boolean;
+};
+type AuthSessionUser = Omit<AccessRequest, 'id' | 'password'> & {
+  id: string;
+  role: 'admin' | 'user';
 };
 type TelegramSubscriber = {
   accountId: string;
@@ -365,10 +369,27 @@ const themes: { id: Theme; name: string }[] = [
 ];
 
 const api = async <T,>(url: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(url, init);
-  if (!response.ok) throw new Error(url);
+  const response = await fetch(url, { credentials: 'include', ...init });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { message?: string } | null;
+    throw new Error(payload?.message || url);
+  }
   return response.json();
 };
+
+const toAccessRequest = (user: AuthSessionUser): AccessRequest => ({
+  id: user.id,
+  userId: user.userId || user.id,
+  name: user.name || user.username,
+  username: user.username,
+  email: user.email,
+  telegram: user.telegram,
+  phone: user.phone,
+  status: user.status,
+  enabled: user.enabled,
+  approvedAt: user.approvedAt,
+  telegramNotificationsEnabled: user.telegramNotificationsEnabled
+});
 
 const fmt = (value: number) => {
   const absValue = Math.abs(value);
@@ -1784,10 +1805,7 @@ function AutoTradePage({
   timeframes: Set<Timeframe>;
   saveSelection: (nextSelected?: Set<string>, nextTimeframes?: Set<Timeframe>, nextExitModes?: Set<ExitMode>, nextMarketScope?: StrategyMarketScope) => Promise<void>;
 }) {
-  const [portalView, setPortalView] = useState<'login' | 'user' | 'admin'>(() => {
-    const saved = readAutoTradeSetting('autoTrade.portalView', 'login');
-    return saved === 'user' || saved === 'admin' ? saved : 'login';
-  });
+  const [portalView, setPortalView] = useState<'login' | 'user' | 'admin'>('login');
   const [capital] = useState(() => readAutoTradeSetting('autoTrade.capital', '25000'));
   const [venueMode, setVenueMode] = useState<MarketMode>(() => readAutoTradeSetting('autoTrade.venueMode', 'spot') === 'futures' ? 'futures' : 'spot');
   const [riskPerTrade, setRiskPerTrade] = useState(() => readAutoTradeSetting('autoTrade.riskPerTrade', '1.5'));
@@ -1893,10 +1911,10 @@ function AutoTradePage({
   const insightRows = useMemo(() => buildInsightRows(signals, strategies, tickers)
     .sort((a, b) => b.score - a.score || b.winRate - a.winRate || b.closed - a.closed || b.total - a.total), [signals, strategies, tickers]);
   const lead = insightRows[0] ?? null;
-  const [memberName, setMemberName] = useState(() => readAutoTradeSetting('autoTrade.memberName', 'Premium Member'));
-  const [adminName, setAdminName] = useState(() => readAutoTradeSetting('autoTrade.adminName', 'Muslim Alramadhan'));
-  const [adminUsername, setAdminUsername] = useState(() => readAutoTradeSetting('autoTrade.adminUsername', 'Muslim Alramadhan'));
-  const [adminPassword, setAdminPassword] = useState(() => readAutoTradeSetting('autoTrade.adminPassword', 'Mueaa71_'));
+  const [sessionUser, setSessionUser] = useState<AuthSessionUser | null>(null);
+  const [memberName, setMemberName] = useState('Premium Member');
+  const [adminName, setAdminName] = useState('Admin');
+  const [adminUsername, setAdminUsername] = useState('admin');
   const [adminEmail, setAdminEmail] = useState(() => readAutoTradeSetting('autoTrade.adminEmail', 'admin@local.test'));
   const [adminTelegram, setAdminTelegram] = useState(() => readAutoTradeSetting('autoTrade.adminTelegram', '@admin'));
   const [adminPhone, setAdminPhone] = useState(() => readAutoTradeSetting('autoTrade.adminPhone', '+966599204215'));
@@ -1990,46 +2008,9 @@ function AutoTradePage({
       return new Set();
     }
   });
-  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>(() => {
-    const cleanSeed = [{
-      id: 1,
-      userId: 'USR-0001',
-      name: '\u0627\u0643\u062a\u0628',
-      username: '\u0627\u0643\u062a\u0628',
-      password: 'Pending123!',
-      email: 'pending@local.test',
-      telegram: '-',
-      phone: '-',
-      status: 'pending' as const,
-      enabled: false,
-      telegramNotificationsEnabled: true
-    }];
-    try {
-      if (localStorage.getItem('autoTrade.accessCleanSeed.v1') !== 'done') {
-        localStorage.setItem('autoTrade.accessRequests', JSON.stringify(cleanSeed));
-        localStorage.setItem('autoTrade.accessCleanSeed.v1', 'done');
-        return cleanSeed;
-      }
-      const saved = JSON.parse(localStorage.getItem('autoTrade.accessRequests') ?? '[]');
-      return Array.isArray(saved) ? saved.map((request: any) => ({
-        id: Number(request.id) || Date.now(),
-        userId: String(request.userId ?? `USR-${String(request.id ?? Date.now()).slice(-6)}`),
-        name: String(request.name ?? 'New Member'),
-        username: String(request.username ?? ''),
-        password: String(request.password ?? ''),
-        email: String(request.email ?? ''),
-        telegram: String(request.telegram ?? ''),
-        phone: String(request.phone ?? ''),
-        status: request.status === 'approved' || request.status === 'rejected' ? request.status : 'pending',
-        enabled: request.enabled !== false,
-        approvedAt: Number(request.approvedAt) || undefined,
-        telegramNotificationsEnabled: request.telegramNotificationsEnabled !== false
-      })) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([]);
   const activeName = portalView === 'admin' ? adminUsername : memberName;
+  const adminPasswordProtected = sessionUser?.role === 'admin';
   useEffect(() => {
   }, [portfolioTradesRange, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesStatusFilter, portfolioTradesSideFilter, portfolioTradesMarketFilter, portfolioTradesTimeframeFilter, portfolioTradesExecutionProfileFilter, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioAcceptedKind, portfolioRejectedKind, autoMode]);
   const greetingLine = useMemo(() => {
@@ -2046,7 +2027,6 @@ function AutoTradePage({
 
   const saveAccessRequests = (next: typeof accessRequests) => {
     setAccessRequests(next);
-    localStorage.setItem('autoTrade.accessRequests', JSON.stringify(next));
   };
 
   const getNextUserId = (requests = accessRequests) => {
@@ -2058,7 +2038,7 @@ function AutoTradePage({
     return `USR-${Date.now()}`;
   };
 
-  const submitAccessRequest = () => {
+  const submitAccessRequest = async () => {
     const username = joinUsername.trim();
     const password = joinPassword.trim();
     const email = joinEmail.trim().toLowerCase();
@@ -2073,31 +2053,60 @@ function AutoTradePage({
       setAuthMessage(policyError);
       return;
     }
-    if (accessRequests.some(request => request.username === username || (email && request.email.toLowerCase() === email))) {
-      setAuthMessage(email ? 'This username or email already exists.' : 'This username already exists.');
-      return;
+    try {
+      const response = await api<{ ok: boolean; user: AuthSessionUser }>('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, email, telegram, phone })
+      });
+      saveAccessRequests([toAccessRequest(response.user), ...accessRequests]);
+      setJoinName('');
+      setJoinUsername('');
+      setJoinPassword('');
+      setJoinEmail('');
+      setJoinTelegram('');
+      setJoinPhone('');
+      setAuthMessage('Request sent. Waiting for admin approval.');
+      setRegisterOpen(false);
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : 'Registration failed.');
     }
-    const id = Date.now();
-    saveAccessRequests([{ id, userId: getNextUserId(), name: username, username, password, email, telegram, phone, status: 'pending', enabled: true, telegramNotificationsEnabled: true }, ...accessRequests]);
-    setJoinName('');
-    setJoinUsername('');
-    setJoinPassword('');
-    setJoinEmail('');
-    setJoinTelegram('');
-    setJoinPhone('');
-    setAuthMessage('Request sent. Waiting for admin approval.');
-    setRegisterOpen(false);
   };
 
-  const updateAccessRequest = (id: number, status: 'approved' | 'rejected') => {
-    saveAccessRequests(accessRequests.map(request => request.id === id ? { ...request, status, enabled: status === 'approved' ? request.enabled : false, approvedAt: status === 'approved' ? (request.approvedAt ?? Date.now()) : request.approvedAt } : request));
+  const updateAccessRequest = async (id: string, status: 'approved' | 'rejected') => {
+    try {
+      const response = await api<{ ok: boolean; users: AuthSessionUser[] }>(`/api/admin/users/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      saveAccessRequests(response.users.map(toAccessRequest));
+    } catch {
+      setAdminControlMessage('User update failed.');
+    }
   };
 
-  const toggleMemberEnabled = (id: number) => {
-    saveAccessRequests(accessRequests.map(request => request.id === id ? { ...request, enabled: !request.enabled } : request));
+  const toggleMemberEnabled = async (id: string) => {
+    const current = accessRequests.find(request => request.id === id);
+    if (!current) return;
+    try {
+      const response = await api<{ ok: boolean; users: AuthSessionUser[] }>(`/api/admin/users/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !current.enabled })
+      });
+      saveAccessRequests(response.users.map(toAccessRequest));
+    } catch {
+      setAdminControlMessage('User update failed.');
+    }
   };
-  const removeAccessRequest = (id: number) => {
-    saveAccessRequests(accessRequests.filter(request => request.id !== id));
+  const removeAccessRequest = async (id: string) => {
+    try {
+      const response = await api<{ ok: boolean; users: AuthSessionUser[] }>(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      saveAccessRequests(response.users.map(toAccessRequest));
+    } catch {
+      setAdminControlMessage('User delete failed.');
+    }
   };
 
   const toggleAdminStrategy = (strategyId: string) => {
@@ -2198,9 +2207,22 @@ function AutoTradePage({
     const nextScope: StrategyMarketScope = current.size === 2 ? 'all' : current.has('spot') ? 'spot' : 'futures';
     updateStrategyMarketScope(nextScope);
   };
-  const toggleUserTelegramDelivery = () => {
+  const toggleUserTelegramDelivery = async () => {
     if (!activeUserRecord) return;
-    saveAccessRequests(accessRequests.map(request => request.id === activeUserRecord.id ? { ...request, telegramNotificationsEnabled: !request.telegramNotificationsEnabled } : request));
+    try {
+      const response = await api<{ ok: boolean; user: AuthSessionUser }>('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: activeUserRecord.username,
+          telegramNotificationsEnabled: !activeUserRecord.telegramNotificationsEnabled
+        })
+      });
+      setSessionUser(response.user);
+      saveAccessRequests([toAccessRequest(response.user)]);
+    } catch {
+      setUserAccessMessage('Telegram preference update failed.');
+    }
   };
   const toggleAdminTelegramNotification = () => {
     setAdminTelegramNotificationEnabled(value => {
@@ -2460,48 +2482,42 @@ function AutoTradePage({
     setLiveModeConfirmOpen(false);
   };
 
-  const handleAutoLogin = () => {
+  const handleAutoLogin = async () => {
     const username = loginUsername.trim();
     const password = loginPassword.trim();
     if (!username || !password) {
       setAuthMessage('');
       return;
     }
-    if (loginRole === 'admin') {
-      const normalizedUsername = username.toLowerCase();
-      const normalizedAdminUsername = adminUsername.trim().toLowerCase();
-      const normalizedAdminName = adminName.trim().toLowerCase();
-      const normalizedPassword = password;
-      const storedAdminPassword = adminPassword.trim();
-      const canonicalAdminUsername = 'muslim alramadhan';
-      const canonicalAdminPassword = 'Mueaa71_';
-      const isDefaultAdmin = normalizedUsername === 'admin' && normalizedPassword === 'admin123';
-      const isSavedAdmin = (normalizedUsername === normalizedAdminUsername || normalizedUsername === normalizedAdminName) && normalizedPassword === storedAdminPassword;
-      const isCanonicalAdmin = normalizedUsername === canonicalAdminUsername && normalizedPassword === canonicalAdminPassword;
-      if (isDefaultAdmin || isSavedAdmin || isCanonicalAdmin) {
-        setAdminName('Muslim Alramadhan');
-        setAdminUsername('Muslim Alramadhan');
-        setAdminPassword('Mueaa71_');
-        if (rememberLogin) localStorage.setItem(loginStorageKey('admin'), JSON.stringify({ username, password }));
-        else localStorage.removeItem(loginStorageKey('admin'));
-        setAuthMessage('');
+    try {
+      const response = await api<{ ok: boolean; user: AuthSessionUser }>('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, role: loginRole })
+      });
+      setSessionUser(response.user);
+      if (rememberLogin) localStorage.setItem(loginStorageKey(loginRole), JSON.stringify({ username }));
+      else localStorage.removeItem(loginStorageKey(loginRole));
+      setLoginPassword('');
+      setAuthMessage('');
+      if (response.user.role === 'admin') {
+        setAdminName(response.user.name || response.user.username);
+        setAdminUsername(response.user.username);
+        setAdminEmail(response.user.email);
+        setAdminTelegram(response.user.telegram);
+        setAdminPhone(response.user.phone);
         setPortalView('admin');
-        return;
+        api<{ ok: boolean; users: AuthSessionUser[] }>('/api/admin/users')
+          .then(next => saveAccessRequests(next.users.map(toAccessRequest)))
+          .catch(() => undefined);
+      } else {
+        setMemberName(response.user.name || response.user.username);
+        saveAccessRequests([toAccessRequest(response.user)]);
+        setPortalView('user');
       }
-      setAuthMessage('Admin login must match the saved admin username or admin name, with the saved password.');
-      return;
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : 'Login failed.');
     }
-    const approvedUser = accessRequests.find(request => request.status === 'approved' && request.enabled && request.username === username && request.password === password);
-    if (!approvedUser) {
-      const pendingUser = accessRequests.find(request => request.status === 'pending' && request.username === username);
-      setAuthMessage(pendingUser ? 'Your account is waiting for admin approval.' : 'User account not approved yet.');
-      return;
-    }
-    if (rememberLogin) localStorage.setItem(loginStorageKey('user'), JSON.stringify({ username, password }));
-    else localStorage.removeItem(loginStorageKey('user'));
-    setMemberName(approvedUser.name);
-    setAuthMessage('');
-    setPortalView('user');
   };
 
 
@@ -2951,7 +2967,9 @@ function AutoTradePage({
     () => getSignalFilterCounts(portfolioLedgerBaseSignals, portfolioTradesStatusFilter, portfolioTradesSideFilter),
     [portfolioLedgerBaseSignals, portfolioTradesSideFilter, portfolioTradesStatusFilter]
   );
-  const activeUserRecord = accessRequests.find(request => request.status === 'approved' && request.name === memberName);
+  const activeUserRecord = sessionUser?.role === 'user'
+    ? toAccessRequest(sessionUser)
+    : accessRequests.find(request => request.status === 'approved' && request.name === memberName);
   const effectivePortfolioBestTrade = autoMode === 'live' ? (livePortfolioData?.summary.bestTrade ?? null) : portfolioLedgerBestTrade;
   const effectivePortfolioWorstTrade = autoMode === 'live' ? (livePortfolioData?.summary.worstTrade ?? null) : portfolioLedgerWorstTrade;
   const effectivePortfolioStats = autoMode === 'live' && livePortfolioSummary
@@ -3081,25 +3099,17 @@ function AutoTradePage({
     if (!/[^A-Za-z0-9]/.test(password)) return 'Password needs one special character.';
     return '';
   };
-  const saveAdminCredentials = () => {
+  const saveAdminCredentials = async () => {
     const nextUsername = adminDraftUsername.trim();
+    const nextEmail = adminDraftEmail.trim().toLowerCase();
     const nextTelegram = adminDraftTelegram.trim();
     const nextPhone = adminDraftPhone.trim();
-    const hasExistingPassword = Boolean(adminPassword && adminPassword !== 'admin123');
-    const wantsPasswordChange = adminCurrentPassword || adminNewPassword || adminConfirmPassword || !hasExistingPassword;
+    const wantsPasswordChange = adminCurrentPassword || adminNewPassword || adminConfirmPassword;
     if (!nextUsername) {
       setAdminCredentialMessage('Username is required.');
       return;
     }
-    if (!hasExistingPassword && !adminNewPassword) {
-      setAdminCredentialMessage('Password is required.');
-      return;
-    }
     if (wantsPasswordChange) {
-      if (hasExistingPassword && adminCurrentPassword !== adminPassword) {
-        setAdminCredentialMessage('Current password is not correct.');
-        return;
-      }
       const policyError = passwordPolicyError(adminNewPassword);
       if (policyError) {
         setAdminCredentialMessage(policyError);
@@ -3109,18 +3119,36 @@ function AutoTradePage({
         setAdminCredentialMessage('New password confirmation does not match.');
         return;
       }
-      setAdminPassword(adminNewPassword);
     }
-    setAdminUsername(nextUsername);
-    setAdminTelegram(nextTelegram);
-    setAdminPhone(nextPhone);
-    setAdminCurrentPassword('');
-    setAdminNewPassword('');
-    setAdminConfirmPassword('');
-    setAdminCredentialMessage('Saved.');
-    setAdminCredentialsOpen(false);
+    try {
+      const response = await api<{ ok: boolean; user: AuthSessionUser }>('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: nextUsername,
+          email: nextEmail,
+          telegram: nextTelegram,
+          phone: nextPhone,
+          currentPassword: adminCurrentPassword,
+          newPassword: adminNewPassword
+        })
+      });
+      setSessionUser(response.user);
+      setAdminUsername(response.user.username);
+      setAdminName(response.user.name || response.user.username);
+      setAdminEmail(response.user.email);
+      setAdminTelegram(response.user.telegram);
+      setAdminPhone(response.user.phone);
+      setAdminCurrentPassword('');
+      setAdminNewPassword('');
+      setAdminConfirmPassword('');
+      setAdminCredentialMessage('Saved.');
+      setAdminCredentialsOpen(false);
+    } catch (error) {
+      setAdminCredentialMessage(error instanceof Error ? error.message : 'Save failed.');
+    }
   };
-  const saveUserAccess = () => {
+  const saveUserAccess = async () => {
     if (!activeUserRecord) return;
     const nextUsername = userDraftUsername.trim();
     const nextTelegram = userDraftTelegram.trim();
@@ -3132,10 +3160,6 @@ function AutoTradePage({
     }
     const patch: Partial<typeof activeUserRecord> = { username: nextUsername, name: nextUsername, telegram: nextTelegram, phone: nextPhone };
     if (wantsPasswordChange) {
-      if (userCurrentPassword !== activeUserRecord.password) {
-        setUserAccessMessage('Current password is not correct.');
-        return;
-      }
       const policyError = passwordPolicyError(userNewPassword);
       if (policyError) {
         setUserAccessMessage(policyError);
@@ -3145,12 +3169,28 @@ function AutoTradePage({
         setUserAccessMessage('New password confirmation does not match.');
         return;
       }
-      patch.password = userNewPassword;
     }
-    saveAccessRequests(accessRequests.map(request => request.id === activeUserRecord.id ? { ...request, ...patch } : request));
-    setMemberName(nextUsername);
-    setUserAccessOpen(false);
-    setUserAccessMessage('Saved.');
+    try {
+      const response = await api<{ ok: boolean; user: AuthSessionUser }>('/api/auth/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: nextUsername,
+          telegram: nextTelegram,
+          phone: nextPhone,
+          currentPassword: userCurrentPassword,
+          newPassword: userNewPassword
+        })
+      });
+      setSessionUser(response.user);
+      const nextRecord = toAccessRequest(response.user);
+      saveAccessRequests(accessRequests.map(request => request.id === activeUserRecord.id ? { ...request, ...nextRecord } : request));
+      setMemberName(nextUsername);
+      setUserAccessOpen(false);
+      setUserAccessMessage('Saved.');
+    } catch (error) {
+      setUserAccessMessage(error instanceof Error ? error.message : 'Save failed.');
+    }
   };
 
   useEffect(() => {
@@ -3173,20 +3213,39 @@ function AutoTradePage({
   }, [userAccessMessage]);
 
   useEffect(() => {
-    setAdminName('Muslim Alramadhan');
-    setAdminUsername('Muslim Alramadhan');
-    setAdminPassword('Mueaa71_');
-    setAdminEmail(current => current || 'admin@local.test');
-    setAdminDraftUsername('Muslim Alramadhan');
-    setAdminDraftEmail(current => current || 'admin@local.test');
     try {
-      localStorage.setItem('autoTrade.adminName', 'Muslim Alramadhan');
-      localStorage.setItem('autoTrade.adminUsername', 'Muslim Alramadhan');
-      localStorage.setItem('autoTrade.adminPassword', 'Mueaa71_');
-      if (!localStorage.getItem('autoTrade.adminEmail')) localStorage.setItem('autoTrade.adminEmail', 'admin@local.test');
+      localStorage.removeItem('autoTrade.adminPassword');
+      localStorage.removeItem('autoTrade.binanceApiKey');
+      localStorage.removeItem('autoTrade.binanceSecretKey');
+      localStorage.removeItem('autoTrade.accessRequests');
+      localStorage.removeItem('autoTrade.accessCleanSeed.v1');
     } catch {
-      // Ignore storage issues in UI-only mode.
+      // Ignore storage cleanup issues.
     }
+  }, []);
+
+  useEffect(() => {
+    api<{ ok: boolean; user: AuthSessionUser | null }>('/api/auth/session')
+      .then(response => {
+        if (!response.user) return;
+        setSessionUser(response.user);
+        if (response.user.role === 'admin') {
+          setAdminName(response.user.name || response.user.username);
+          setAdminUsername(response.user.username);
+          setAdminEmail(response.user.email);
+          setAdminTelegram(response.user.telegram);
+          setAdminPhone(response.user.phone);
+          setPortalView('admin');
+          api<{ ok: boolean; users: AuthSessionUser[] }>('/api/admin/users')
+            .then(next => saveAccessRequests(next.users.map(toAccessRequest)))
+            .catch(() => undefined);
+        } else {
+          setMemberName(response.user.name || response.user.username);
+          saveAccessRequests([toAccessRequest(response.user)]);
+          setPortalView('user');
+        }
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -3249,7 +3308,8 @@ function AutoTradePage({
       const parsed = JSON.parse(saved) as { username?: string; password?: string };
       setRememberLogin(true);
       setLoginUsername(parsed.username ?? '');
-      setLoginPassword(parsed.password ?? '');
+      setLoginPassword('');
+      if (parsed.password) localStorage.setItem(loginStorageKey(loginRole), JSON.stringify({ username: parsed.username ?? '' }));
     } catch {
       setRememberLogin(false);
       setLoginUsername('');
@@ -3273,14 +3333,6 @@ function AutoTradePage({
     try {
       localStorage.setItem('autoTrade.portalView', portalView);
       localStorage.setItem('autoTrade.memberName', memberName);
-      localStorage.setItem('autoTrade.adminName', adminName);
-      localStorage.setItem('autoTrade.adminUsername', adminUsername);
-      localStorage.setItem('autoTrade.adminPassword', adminPassword);
-      localStorage.setItem('autoTrade.adminEmail', adminEmail);
-      localStorage.setItem('autoTrade.adminTelegram', adminTelegram);
-      localStorage.setItem('autoTrade.adminPhone', adminPhone);
-      localStorage.setItem('autoTrade.binanceApiKey', binanceApiKey);
-      localStorage.setItem('autoTrade.binanceSecretKey', binanceSecretKey);
       localStorage.setItem('autoTrade.capital', capital);
       localStorage.setItem('autoTrade.venueMode', venueMode);
       localStorage.setItem('autoTrade.riskPerTrade', riskPerTrade);
@@ -3302,7 +3354,7 @@ function AutoTradePage({
     } catch {
       // Ignore storage issues and keep the in-memory state working.
     }
-  }, [adminEmail, adminName, adminPassword, adminPhone, adminTelegram, adminUsername, allocationMethod, allowedDirection, autoMode, breakEvenEnabled, breakEvenTriggerPct, capital, customRiskReward, dailyLoss, drawdownPause, executionSource, futuresLeverage, futuresMarginMode, liveExecutionMode, liveKillSwitch, maxLossStreak, maxStrategyExposure, maxTrades, memberName, minRiskReward, portfolioFloorEnabled, portfolioFloorLockPct, portfolioFloorTriggerPct, portalView, reserveRatio, riskPerTrade, trailingGapPct, trailingStopEnabled, venueMode]);
+  }, [allocationMethod, allowedDirection, autoMode, breakEvenEnabled, breakEvenTriggerPct, capital, customRiskReward, dailyLoss, drawdownPause, executionSource, futuresLeverage, futuresMarginMode, liveExecutionMode, liveKillSwitch, maxLossStreak, maxStrategyExposure, maxTrades, memberName, minRiskReward, portfolioFloorEnabled, portfolioFloorLockPct, portfolioFloorTriggerPct, portalView, reserveRatio, riskPerTrade, trailingGapPct, trailingStopEnabled, venueMode]);
 
   useEffect(() => {
     if (!rulesSaveMessage) return;
@@ -4950,7 +5002,7 @@ function AutoTradePage({
                 <span>Login Credentials</span>
                 <div><small>Admin ID</small><b>ADM-0001</b></div>
                 <div><small>Username</small><b>{adminUsername || '-'}</b></div>
-                <div><small>Password Status</small><b className={adminPassword && adminPassword !== 'admin123' ? 'protected-status' : 'unset-status'}>{adminPassword && adminPassword !== 'admin123' ? 'Protected' : 'Not set'}</b></div>
+                <div><small>Password Status</small><b className={adminPasswordProtected ? 'protected-status' : 'unset-status'}>{adminPasswordProtected ? 'Protected' : 'Not set'}</b></div>
               </div>
               <i aria-hidden="true" />
               <div className="admin-split-section recovery">
@@ -4974,7 +5026,7 @@ function AutoTradePage({
               </label>
               <div className="admin-password-editor">
                 <span>Change Password</span>
-                {adminPassword && adminPassword !== 'admin123' && <label className="password-field">
+                {adminPasswordProtected && <label className="password-field">
                   <input value={adminCurrentPassword} onChange={event => setAdminCurrentPassword(event.target.value)} placeholder="Current password" type={adminCurrentPasswordVisible ? 'text' : 'password'} />
                   <button type="button" onClick={() => setAdminCurrentPasswordVisible(visible => !visible)}>{adminCurrentPasswordVisible ? <EyeOff size={17} /> : <Eye size={17} />}</button>
                 </label>}
@@ -5048,7 +5100,7 @@ function AutoTradePage({
                 <button type="button" onClick={adminCredentialsOpen ? closeAdminCredentialsEditor : openAdminCredentialsEditor}>{adminCredentialsOpen ? 'Close' : 'Edit'}</button>
               </div>
               <div className="admin-personal-summary">
-                <article><span>Password</span><strong className={adminPassword && adminPassword !== 'admin123' ? 'protected-status' : 'unset-status'}>{adminPassword && adminPassword !== 'admin123' ? 'Protected' : 'Not set'}</strong></article>
+                <article><span>Password</span><strong className={adminPasswordProtected ? 'protected-status' : 'unset-status'}>{adminPasswordProtected ? 'Protected' : 'Not set'}</strong></article>
                 <article><span>Telegram</span><strong>{adminTelegram || '-'}</strong></article>
                 <article><span>Mobile</span><strong>{adminPhone || '-'}</strong></article>
               </div>
@@ -5068,7 +5120,7 @@ function AutoTradePage({
                 </label>
                 <div className="admin-password-editor">
                   <span>Change Password</span>
-                  {adminPassword && adminPassword !== 'admin123' && <label className="password-field">
+                  {adminPasswordProtected && <label className="password-field">
                     <input value={adminCurrentPassword} onChange={event => setAdminCurrentPassword(event.target.value)} placeholder="Current password" type={adminCurrentPasswordVisible ? 'text' : 'password'} />
                     <button type="button" onClick={() => setAdminCurrentPasswordVisible(visible => !visible)}>{adminCurrentPasswordVisible ? <EyeOff size={17} /> : <Eye size={17} />}</button>
                   </label>}

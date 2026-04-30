@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import sharp from 'sharp';
 import WebSocket, { WebSocketServer } from 'ws';
 
@@ -247,10 +248,13 @@ const PORT = Number(process.env.PORT ?? 8787);
 const ROOT_DIR = process.cwd();
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
+const DB_FILE = path.join(DATA_DIR, 'app.sqlite');
 const STATE_FILE = path.join(DATA_DIR, 'trading-state.json');
 const TELEGRAM_SUBSCRIBERS_FILE = path.join(DATA_DIR, 'telegram-subscribers.json');
 const BINANCE_VAULT_FILE = path.join(DATA_DIR, 'binance-vault.json');
 const BINANCE_VAULT_KEY_FILE = path.join(DATA_DIR, 'binance-vault.key');
+const AUTH_USERS_FILE = path.join(DATA_DIR, 'auth-users.json');
+const AUTH_SESSION_KEY_FILE = path.join(DATA_DIR, 'auth-session.key');
 const SIGNAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const TELEGRAM_CONFIG_FILE = path.join(ROOT_DIR, 'start-system.bat');
 const CANDLE_LIMIT_DEFAULT = 80;
@@ -273,6 +277,64 @@ const CANDLE_CACHE_TTL_MS: Record<Timeframe, number> = {
   '4h': 240_000,
   '1d': 600_000
 };
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const database = new DatabaseSync(DB_FILE);
+database.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE IF NOT EXISTS secure_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS auth_users (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'user')),
+    username TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    telegram TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    password_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+    enabled INTEGER NOT NULL DEFAULT 1,
+    telegram_notifications_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    approved_at INTEGER,
+    UNIQUE(role, username)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS auth_users_email_unique
+    ON auth_users(email)
+    WHERE email <> '';
+`);
+
+function readSecureSetting<T>(key: string): T | null {
+  const row = database.prepare('SELECT value FROM secure_settings WHERE key = ?').get(key) as { value?: string } | undefined;
+  if (!row?.value) return null;
+  return JSON.parse(row.value) as T;
+}
+
+function writeSecureSetting(key: string, value: unknown) {
+  database.prepare(`
+    INSERT INTO secure_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, JSON.stringify(value), Date.now());
+}
+
+function deleteSecureSetting(key: string) {
+  database.prepare('DELETE FROM secure_settings WHERE key = ?').run(key);
+}
+
+function removeMigratedSecretFile(filePath: string) {
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (error) {
+    console.warn(`[security] migrated secret file could not be removed: ${path.basename(filePath)}`, error);
+  }
+}
 
 function formatTradeIdLabel(id: number) {
   return `T-${Math.max(0, id).toString(36).toUpperCase().padStart(6, '0')}`;
@@ -310,9 +372,470 @@ process.on('uncaughtException', error => {
 });
 
 const app = express();
-app.use(express.json());
+app.disable('x-powered-by');
+app.use(express.json({ limit: '64kb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true, uptime: process.uptime() });
+});
+
+type AuthRole = 'admin' | 'user';
+
+type AuthUser = {
+  id: string;
+  role: AuthRole;
+  username: string;
+  name: string;
+  email: string;
+  telegram: string;
+  phone: string;
+  passwordHash: string;
+  status: 'pending' | 'approved' | 'rejected';
+  enabled: boolean;
+  telegramNotificationsEnabled: boolean;
+  createdAt: number;
+  approvedAt?: number;
+};
+
+type AuthSession = {
+  sub: string;
+  role: AuthRole;
+  exp: number;
+};
+
+let authUsers: AuthUser[] = [];
+const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
+
+type AuthUserRow = {
+  id: string;
+  role: AuthRole;
+  username: string;
+  name: string;
+  email: string;
+  telegram: string;
+  phone: string;
+  password_hash: string;
+  status: AuthUser['status'];
+  enabled: number;
+  telegram_notifications_enabled: number;
+  created_at: number;
+  approved_at: number | null;
+};
+
+function authUserFromRow(row: AuthUserRow): AuthUser {
+  return {
+    id: row.id,
+    role: row.role,
+    username: row.username,
+    name: row.name,
+    email: row.email,
+    telegram: row.telegram,
+    phone: row.phone,
+    passwordHash: row.password_hash,
+    status: row.status,
+    enabled: Boolean(row.enabled),
+    telegramNotificationsEnabled: Boolean(row.telegram_notifications_enabled),
+    createdAt: row.created_at,
+    approvedAt: row.approved_at ?? undefined
+  };
+}
+
+function refreshAuthUsers() {
+  authUsers = (database.prepare('SELECT * FROM auth_users ORDER BY created_at DESC').all() as AuthUserRow[]).map(authUserFromRow);
+}
+
+function persistAuthUser(user: AuthUser) {
+  database.prepare(`
+    INSERT INTO auth_users (
+      id, role, username, name, email, telegram, phone, password_hash, status,
+      enabled, telegram_notifications_enabled, created_at, approved_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      role = excluded.role,
+      username = excluded.username,
+      name = excluded.name,
+      email = excluded.email,
+      telegram = excluded.telegram,
+      phone = excluded.phone,
+      password_hash = excluded.password_hash,
+      status = excluded.status,
+      enabled = excluded.enabled,
+      telegram_notifications_enabled = excluded.telegram_notifications_enabled,
+      created_at = excluded.created_at,
+      approved_at = excluded.approved_at
+  `).run(
+    user.id,
+    user.role,
+    user.username,
+    user.name,
+    user.email,
+    user.telegram,
+    user.phone,
+    user.passwordHash,
+    user.status,
+    user.enabled ? 1 : 0,
+    user.telegramNotificationsEnabled ? 1 : 0,
+    user.createdAt,
+    user.approvedAt ?? null
+  );
+}
+
+function upsertAuthUser(user: AuthUser) {
+  persistAuthUser(user);
+  refreshAuthUsers();
+}
+
+function rateLimit(name: string, options: { windowMs: number; max: number }) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const key = `${name}:${req.ip ?? req.socket.remoteAddress ?? 'unknown'}`;
+    const now = Date.now();
+    const current = rateLimitBuckets.get(key);
+    if (!current || current.resetAt <= now) {
+      rateLimitBuckets.set(key, { count: 1, resetAt: now + options.windowMs });
+      next();
+      return;
+    }
+    current.count += 1;
+    if (current.count > options.max) {
+      res.status(429).json({ ok: false, message: 'Too many attempts. Try again later.' });
+      return;
+    }
+    next();
+  };
+}
+
+function passwordPolicyError(password: string) {
+  if (password.length < 8) return 'Password must be at least 8 characters.';
+  if (!/[A-Z]/.test(password)) return 'Password needs one uppercase letter.';
+  if (!/[a-z]/.test(password)) return 'Password needs one lowercase letter.';
+  if (!/\d/.test(password)) return 'Password needs one number.';
+  if (!/[^A-Za-z0-9]/.test(password)) return 'Password needs one special character.';
+  return '';
+}
+
+function timingSafeEqualString(a: string, b: string) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function hashPassword(password: string, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `scrypt:${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, storedHash: string) {
+  const [, salt, expected] = storedHash.split(':');
+  if (!salt || !expected) return false;
+  return timingSafeEqualString(hashPassword(password, salt), storedHash);
+}
+
+function ensureSessionKey() {
+  const envKey = process.env.AUTH_SESSION_KEY?.trim();
+  if (envKey) return envKey;
+  const stored = readSecureSetting<string>('auth_session_key');
+  if (stored) return stored;
+  if (fs.existsSync(AUTH_SESSION_KEY_FILE)) {
+    const migrated = fs.readFileSync(AUTH_SESSION_KEY_FILE, 'utf8').trim();
+    if (migrated) {
+      writeSecureSetting('auth_session_key', migrated);
+      removeMigratedSecretFile(AUTH_SESSION_KEY_FILE);
+      return migrated;
+    }
+  }
+  const generated = crypto.randomBytes(32).toString('hex');
+  writeSecureSetting('auth_session_key', generated);
+  return generated;
+}
+
+function signSession(session: AuthSession) {
+  const payload = Buffer.from(JSON.stringify(session)).toString('base64url');
+  const signature = crypto.createHmac('sha256', ensureSessionKey()).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function parseCookies(header?: string) {
+  return Object.fromEntries((header ?? '').split(';').map(part => {
+    const index = part.indexOf('=');
+    if (index < 0) return ['', ''];
+    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
+  }).filter(([key]) => key));
+}
+
+function readSessionToken(token?: string): AuthSession | null {
+  if (!token) return null;
+  const [payload, signature] = token.split('.');
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac('sha256', ensureSessionKey()).update(payload).digest('base64url');
+  if (!timingSafeEqualString(signature, expected)) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Partial<AuthSession>;
+    if (!session.sub || (session.role !== 'admin' && session.role !== 'user') || typeof session.exp !== 'number' || session.exp < Date.now()) return null;
+    return session as AuthSession;
+  } catch {
+    return null;
+  }
+}
+
+function currentUser(req: express.Request) {
+  const session = readSessionToken(parseCookies(req.headers.cookie).auto_trade_session);
+  if (!session) return null;
+  const user = authUsers.find(item => item.id === session.sub && item.role === session.role && item.enabled && item.status === 'approved');
+  return user ?? null;
+}
+
+function publicUser(user: AuthUser) {
+  return {
+    id: user.id,
+    userId: user.id,
+    role: user.role,
+    username: user.username,
+    name: user.name,
+    email: user.email,
+    telegram: user.telegram,
+    phone: user.phone,
+    status: user.status,
+    enabled: user.enabled,
+    approvedAt: user.approvedAt,
+    telegramNotificationsEnabled: user.telegramNotificationsEnabled
+  };
+}
+
+function setSessionCookie(res: express.Response, user: AuthUser) {
+  const token = signSession({ sub: user.id, role: user.role, exp: Date.now() + 12 * 60 * 60 * 1000 });
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `auto_trade_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${secure}`);
+}
+
+function clearSessionCookie(res: express.Response) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `auto_trade_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}`);
+}
+
+function saveAuthUsers() {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.prepare('DELETE FROM auth_users').run();
+    for (const user of authUsers) persistAuthUser(user);
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+  refreshAuthUsers();
+}
+
+function nextAuthUserId() {
+  const used = new Set(authUsers.map(user => user.id));
+  for (let index = 1; index < 10000; index += 1) {
+    const id = `USR-${String(index).padStart(4, '0')}`;
+    if (!used.has(id)) return id;
+  }
+  return `USR-${Date.now()}`;
+}
+
+function loadAuthUsers() {
+  refreshAuthUsers();
+  if (authUsers.length === 0 && fs.existsSync(AUTH_USERS_FILE)) {
+    const data = JSON.parse(fs.readFileSync(AUTH_USERS_FILE, 'utf8')) as { users?: AuthUser[] };
+    authUsers = Array.isArray(data.users) ? data.users : [];
+    saveAuthUsers();
+    removeMigratedSecretFile(AUTH_USERS_FILE);
+  }
+  if (process.env.ADMIN_PASSWORD) {
+    const configuredAdmin = authUsers.find(user => user.role === 'admin');
+    if (configuredAdmin) {
+      configuredAdmin.username = (process.env.ADMIN_USERNAME ?? configuredAdmin.username).trim();
+      configuredAdmin.name = configuredAdmin.username;
+      configuredAdmin.email = process.env.ADMIN_EMAIL ?? configuredAdmin.email;
+      configuredAdmin.telegram = process.env.ADMIN_TELEGRAM ?? configuredAdmin.telegram;
+      configuredAdmin.phone = process.env.ADMIN_PHONE ?? configuredAdmin.phone;
+      configuredAdmin.passwordHash = hashPassword(process.env.ADMIN_PASSWORD.trim());
+      configuredAdmin.status = 'approved';
+      configuredAdmin.enabled = true;
+      upsertAuthUser(configuredAdmin);
+    }
+  }
+  if (authUsers.some(user => user.role === 'admin')) return;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('ADMIN_PASSWORD is required before creating the first production admin account.');
+  }
+  const bootstrapPassword = (process.env.ADMIN_PASSWORD ?? crypto.randomBytes(18).toString('base64url')).trim();
+  const adminUsername = (process.env.ADMIN_USERNAME ?? 'admin').trim();
+  authUsers.push({
+    id: 'ADMIN',
+    role: 'admin',
+    username: adminUsername,
+    name: adminUsername,
+    email: process.env.ADMIN_EMAIL ?? 'admin@local.test',
+    telegram: process.env.ADMIN_TELEGRAM ?? '',
+    phone: process.env.ADMIN_PHONE ?? '',
+    passwordHash: hashPassword(bootstrapPassword),
+    status: 'approved',
+    enabled: true,
+    telegramNotificationsEnabled: true,
+    createdAt: Date.now(),
+    approvedAt: Date.now()
+  });
+  saveAuthUsers();
+  if (!process.env.ADMIN_PASSWORD && process.env.NODE_ENV !== 'production') {
+    console.warn(`[auth] bootstrap admin created: username=${adminUsername} password=${bootstrapPassword}`);
+  }
+}
+
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const user = currentUser(req);
+  if (!user) {
+    res.status(401).json({ ok: false, message: 'Authentication required.' });
+    return;
+  }
+  res.locals.user = user;
+  next();
+}
+
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const user = currentUser(req);
+  if (!user || user.role !== 'admin') {
+    res.status(user ? 403 : 401).json({ ok: false, message: 'Admin permission required.' });
+    return;
+  }
+  res.locals.user = user;
+  next();
+}
+
+app.get('/api/auth/session', (req, res) => {
+  const user = currentUser(req);
+  res.json({ ok: true, user: user ? publicUser(user) : null });
+});
+
+app.post('/api/auth/login', rateLimit('auth-login', { windowMs: 15 * 60 * 1000, max: 10 }), (req, res) => {
+  const username = String(req.body?.username ?? '').trim().toLowerCase();
+  const password = String(req.body?.password ?? '');
+  const role = req.body?.role === 'admin' ? 'admin' : 'user';
+  const user = authUsers.find(item => item.role === role && item.username.toLowerCase() === username);
+  if (!user || !user.enabled || user.status !== 'approved' || !verifyPassword(password, user.passwordHash)) {
+    res.status(401).json({ ok: false, message: 'Invalid credentials or account is not approved.' });
+    return;
+  }
+  setSessionCookie(res, user);
+  res.json({ ok: true, user: publicUser(user) });
+});
+
+app.post('/api/auth/logout', (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/register', rateLimit('auth-register', { windowMs: 15 * 60 * 1000, max: 5 }), (req, res) => {
+  const username = String(req.body?.username ?? '').trim();
+  const password = String(req.body?.password ?? '');
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  const telegram = String(req.body?.telegram ?? '').trim();
+  const phone = String(req.body?.phone ?? '').trim();
+  if (!username || !password) {
+    res.status(400).json({ ok: false, message: 'Username and password are required.' });
+    return;
+  }
+  const policyError = passwordPolicyError(password);
+  if (policyError) {
+    res.status(400).json({ ok: false, message: policyError });
+    return;
+  }
+  if (authUsers.some(user => user.username.toLowerCase() === username.toLowerCase() || (email && user.email.toLowerCase() === email))) {
+    res.status(409).json({ ok: false, message: 'This username or email already exists.' });
+    return;
+  }
+  const user: AuthUser = {
+    id: nextAuthUserId(),
+    role: 'user',
+    username,
+    name: username,
+    email,
+    telegram,
+    phone,
+    passwordHash: hashPassword(password),
+    status: 'pending',
+    enabled: true,
+    telegramNotificationsEnabled: true,
+    createdAt: Date.now()
+  };
+  authUsers.unshift(user);
+  saveAuthUsers();
+  res.json({ ok: true, user: publicUser(user) });
+});
+
+app.get('/api/admin/users', requireAdmin, (_req, res) => {
+  res.json({ ok: true, users: authUsers.filter(user => user.role === 'user').map(publicUser) });
+});
+
+app.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
+  const user = authUsers.find(item => item.id === req.params.id && item.role === 'user');
+  if (!user) {
+    res.status(404).json({ ok: false, message: 'User not found.' });
+    return;
+  }
+  if (req.body?.status === 'approved' || req.body?.status === 'rejected' || req.body?.status === 'pending') {
+    user.status = req.body.status;
+    user.enabled = user.status === 'approved' ? user.enabled : false;
+    if (user.status === 'approved') user.approvedAt = user.approvedAt ?? Date.now();
+  }
+  if (typeof req.body?.enabled === 'boolean') user.enabled = req.body.enabled;
+  if (typeof req.body?.telegramNotificationsEnabled === 'boolean') user.telegramNotificationsEnabled = req.body.telegramNotificationsEnabled;
+  saveAuthUsers();
+  res.json({ ok: true, users: authUsers.filter(item => item.role === 'user').map(publicUser) });
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
+  authUsers = authUsers.filter(item => item.id !== req.params.id || item.role !== 'user');
+  saveAuthUsers();
+  res.json({ ok: true, users: authUsers.filter(item => item.role === 'user').map(publicUser) });
+});
+
+app.patch('/api/auth/me', requireAuth, (req, res) => {
+  const user = res.locals.user as AuthUser;
+  const nextUsername = String(req.body?.username ?? user.username).trim();
+  const nextPassword = String(req.body?.newPassword ?? '');
+  if (!nextUsername) {
+    res.status(400).json({ ok: false, message: 'Username is required.' });
+    return;
+  }
+  if (nextUsername.toLowerCase() !== user.username.toLowerCase() && authUsers.some(item => item.username.toLowerCase() === nextUsername.toLowerCase())) {
+    res.status(409).json({ ok: false, message: 'Username already exists.' });
+    return;
+  }
+  if (nextPassword) {
+    const policyError = passwordPolicyError(nextPassword);
+    if (policyError) {
+      res.status(400).json({ ok: false, message: policyError });
+      return;
+    }
+    const currentPassword = String(req.body?.currentPassword ?? '');
+    if (!verifyPassword(currentPassword, user.passwordHash)) {
+      res.status(400).json({ ok: false, message: 'Current password is not correct.' });
+      return;
+    }
+    user.passwordHash = hashPassword(nextPassword);
+  }
+  user.username = nextUsername;
+  user.name = nextUsername;
+  user.email = String(req.body?.email ?? user.email).trim().toLowerCase();
+  user.telegram = String(req.body?.telegram ?? user.telegram).trim();
+  user.phone = String(req.body?.phone ?? user.phone).trim();
+  if (typeof req.body?.telegramNotificationsEnabled === 'boolean') {
+    user.telegramNotificationsEnabled = req.body.telegramNotificationsEnabled;
+  }
+  saveAuthUsers();
+  res.json({ ok: true, user: publicUser(user) });
 });
 
 const server = http.createServer(app);
@@ -494,11 +1017,26 @@ let binanceVaultState: BinanceVaultState = {
 };
 
 function ensureVaultKey() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(BINANCE_VAULT_KEY_FILE)) {
-    fs.writeFileSync(BINANCE_VAULT_KEY_FILE, crypto.randomBytes(32).toString('hex'));
+  const envKey = process.env.SECRETS_MASTER_KEY?.trim();
+  if (envKey) {
+    const normalized = /^[0-9a-f]{64}$/i.test(envKey)
+      ? Buffer.from(envKey, 'hex')
+      : crypto.createHash('sha256').update(envKey).digest();
+    return normalized;
   }
-  return Buffer.from(fs.readFileSync(BINANCE_VAULT_KEY_FILE, 'utf8').trim(), 'hex');
+  const stored = readSecureSetting<string>('local_secrets_master_key');
+  if (stored) return Buffer.from(stored, 'hex');
+  if (fs.existsSync(BINANCE_VAULT_KEY_FILE)) {
+    const migrated = fs.readFileSync(BINANCE_VAULT_KEY_FILE, 'utf8').trim();
+    if (/^[0-9a-f]{64}$/i.test(migrated)) {
+      writeSecureSetting('local_secrets_master_key', migrated);
+      removeMigratedSecretFile(BINANCE_VAULT_KEY_FILE);
+      return Buffer.from(migrated, 'hex');
+    }
+  }
+  const generated = crypto.randomBytes(32).toString('hex');
+  writeSecureSetting('local_secrets_master_key', generated);
+  return Buffer.from(generated, 'hex');
 }
 
 function encryptSecret(payload: { apiKey: string; secretKey: string }) {
@@ -520,13 +1058,18 @@ function fingerprintApiKey(apiKey: string) {
 }
 
 function decryptSecret() {
-  if (!fs.existsSync(BINANCE_VAULT_FILE)) return null;
+  let vault = readSecureSetting<{ iv?: string; tag?: string; data?: string }>('binance_vault');
+  if (!vault && fs.existsSync(BINANCE_VAULT_FILE)) {
+    vault = JSON.parse(fs.readFileSync(BINANCE_VAULT_FILE, 'utf8')) as {
+      iv?: string;
+      tag?: string;
+      data?: string;
+    };
+    if (vault?.iv && vault.tag && vault.data) writeSecureSetting('binance_vault', vault);
+    removeMigratedSecretFile(BINANCE_VAULT_FILE);
+  }
+  if (!vault) return null;
   const key = ensureVaultKey();
-  const vault = JSON.parse(fs.readFileSync(BINANCE_VAULT_FILE, 'utf8')) as {
-    iv?: string;
-    tag?: string;
-    data?: string;
-  };
   if (!vault.iv || !vault.tag || !vault.data) return null;
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(vault.iv, 'hex'));
   decipher.setAuthTag(Buffer.from(vault.tag, 'hex'));
@@ -615,8 +1158,7 @@ type StoredBinanceVault = {
 };
 
 function persistBinanceVault(encrypted: ReturnType<typeof encryptSecret>, updatedAt: number, keyFingerprint: string, validation: Awaited<ReturnType<typeof validateBinanceConnection>>) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(BINANCE_VAULT_FILE, JSON.stringify({
+  writeSecureSetting('binance_vault', {
     ...encrypted,
     updatedAt,
     verifiedAt: validation.verifiedAt,
@@ -624,7 +1166,7 @@ function persistBinanceVault(encrypted: ReturnType<typeof encryptSecret>, update
     connected: validation.connected,
     statusText: validation.statusText,
     scopes: validation.scopes
-  }, null, 2));
+  });
   binanceVaultState = {
     connected: validation.connected,
     saved: true,
@@ -639,7 +1181,8 @@ function persistBinanceVault(encrypted: ReturnType<typeof encryptSecret>, update
 async function refreshBinanceVaultState() {
   const credentials = decryptSecret();
   if (!credentials) return binanceVaultState;
-  const stored = JSON.parse(fs.readFileSync(BINANCE_VAULT_FILE, 'utf8')) as StoredBinanceVault;
+  const stored = readSecureSetting<StoredBinanceVault>('binance_vault');
+  if (!stored) return binanceVaultState;
   const encrypted = {
     iv: String(stored.iv ?? ''),
     tag: String(stored.tag ?? ''),
@@ -1674,9 +2217,14 @@ async function applyExecutionPipeline(signal: TradeSignal) {
 }
 
 function loadBinanceVault() {
-  if (!fs.existsSync(BINANCE_VAULT_FILE)) return;
+  let vault = readSecureSetting<StoredBinanceVault>('binance_vault');
+  if (!vault && fs.existsSync(BINANCE_VAULT_FILE)) {
+    vault = JSON.parse(fs.readFileSync(BINANCE_VAULT_FILE, 'utf8')) as StoredBinanceVault;
+    writeSecureSetting('binance_vault', vault);
+    removeMigratedSecretFile(BINANCE_VAULT_FILE);
+  }
+  if (!vault) return;
   try {
-    const vault = JSON.parse(fs.readFileSync(BINANCE_VAULT_FILE, 'utf8')) as StoredBinanceVault;
     const scopes = { ...emptyBinanceScopes(), ...(vault.scopes ?? {}) };
     binanceVaultState = {
       connected: Boolean(vault.connected),
@@ -1709,7 +2257,7 @@ function saveBinanceVault(apiKey: string, secretKey: string, validation: ReturnT
 }
 
 function clearBinanceVault() {
-  if (fs.existsSync(BINANCE_VAULT_FILE)) fs.unlinkSync(BINANCE_VAULT_FILE);
+  deleteSecureSetting('binance_vault');
   binanceVaultState = {
     connected: false,
     saved: false,
@@ -1773,18 +2321,22 @@ function normalizeTimeframeList(value: unknown): Timeframe[] {
 }
 
 function saveTelegramSubscribers() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
   const payload: TelegramSubscriptionState = {
     subscribers: telegramSubscribers,
     lastUpdateId: telegramLastUpdateId
   };
-  fs.writeFileSync(TELEGRAM_SUBSCRIBERS_FILE, JSON.stringify(payload, null, 2));
+  writeSecureSetting('telegram_subscribers', payload);
 }
 
 function loadTelegramSubscribers() {
-  if (!fs.existsSync(TELEGRAM_SUBSCRIBERS_FILE)) return;
+  let data = readSecureSetting<Partial<TelegramSubscriptionState>>('telegram_subscribers');
+  if (!data && fs.existsSync(TELEGRAM_SUBSCRIBERS_FILE)) {
+    data = JSON.parse(fs.readFileSync(TELEGRAM_SUBSCRIBERS_FILE, 'utf8')) as Partial<TelegramSubscriptionState>;
+    writeSecureSetting('telegram_subscribers', data);
+    removeMigratedSecretFile(TELEGRAM_SUBSCRIBERS_FILE);
+  }
+  if (!data) return;
   try {
-    const data = JSON.parse(fs.readFileSync(TELEGRAM_SUBSCRIBERS_FILE, 'utf8')) as Partial<TelegramSubscriptionState>;
     telegramSubscribers = Array.isArray(data.subscribers)
       ? data.subscribers.map((item): TelegramAccountSubscription => ({
         accountId: String(item.accountId ?? ''),
@@ -4133,7 +4685,7 @@ app.get('/api/chart', async (req, res) => {
   }
 });
 app.get('/api/strategies', (_req, res) => res.json({ strategies, selected: [...selectedStrategies], timeframes: [...selectedTimeframes], exitModes: [...selectedExitModes], marketScope: selectedMarketScope }));
-app.post('/api/strategies/select', (req, res) => {
+app.post('/api/strategies/select', requireAdmin, (req, res) => {
   selectedStrategies = new Set((req.body.strategyIds ?? []).filter((id: string) => strategies.some(s => s.id === id)));
   selectedTimeframes = new Set((req.body.timeframes ?? ['5m', '10m', '15m']).filter((x: Timeframe) => SUPPORTED_TIMEFRAMES.includes(x)));
   selectedMarketScope = req.body.marketScope === 'spot' || req.body.marketScope === 'futures' || req.body.marketScope === 'all' ? req.body.marketScope : selectedMarketScope;
@@ -4147,10 +4699,10 @@ app.post('/api/strategies/select', (req, res) => {
   saveState();
   res.json({ ok: true, selected: [...selectedStrategies], timeframes: [...selectedTimeframes], exitModes: [...selectedExitModes], marketScope: selectedMarketScope });
 });
-app.get('/api/live-rules', (_req, res) => {
+app.get('/api/live-rules', requireAuth, (_req, res) => {
   res.json({ ok: true, rules: liveExecutionRules });
 });
-app.get('/api/portfolio/live-summary', async (req, res) => {
+app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
   try {
     const range = String(req.query.range ?? '24h');
     const customFrom = typeof req.query.customFrom === 'string' ? req.query.customFrom : undefined;
@@ -4282,7 +4834,7 @@ app.get('/api/portfolio/live-summary', async (req, res) => {
     res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Unable to build live portfolio summary.' });
   }
 });
-app.get('/api/portfolio/live-ledger', async (req, res) => {
+app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
   try {
     const range = String(req.query.range ?? '24h');
     const customFrom = typeof req.query.customFrom === 'string' ? req.query.customFrom : undefined;
@@ -4507,7 +5059,7 @@ app.get('/api/portfolio/live-ledger', async (req, res) => {
     res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Unable to build live portfolio ledger.' });
   }
 });
-app.post('/api/live-rules', (req, res) => {
+app.post('/api/live-rules', requireAdmin, (req, res) => {
   const requested = req.body ?? {};
   const wantsLiveMode = requested.executionMode === 'live';
   if (wantsLiveMode && requested.liveActivationConfirmed !== true) {
@@ -4517,7 +5069,7 @@ app.post('/api/live-rules', (req, res) => {
   saveState();
   res.json({ ok: true, rules: liveExecutionRules });
 });
-app.post('/api/dashboard/reset', (_req, res) => {
+app.post('/api/dashboard/reset', requireAdmin, (_req, res) => {
   scanVersion++;
   signals.splice(0, signals.length);
   notifications.splice(0, notifications.length);
@@ -4582,7 +5134,7 @@ app.get('/api/home-intel', async (_req, res) => {
     res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Unable to build home intel feed.' });
   }
 });
-app.get('/api/telegram/subscribers', (_req, res) => {
+app.get('/api/telegram/subscribers', requireAdmin, (_req, res) => {
   res.json({
     ok: true,
     subscribers: telegramSubscribers.map(subscriber => ({
@@ -4591,7 +5143,7 @@ app.get('/api/telegram/subscribers', (_req, res) => {
     }))
   });
 });
-app.get('/api/telegram/config', (_req, res) => {
+app.get('/api/telegram/config', requireAuth, (_req, res) => {
   res.json({
     ok: true,
     publicChannelEnabled: telegramRuntimeSettings.publicChannelEnabled,
@@ -4603,7 +5155,7 @@ app.get('/api/telegram/config', (_req, res) => {
     privateBotConfigured: Boolean(PRIVATE_TELEGRAM_BOT_TOKEN && PRIVATE_TELEGRAM_BOT_USERNAME)
   });
 });
-app.post('/api/telegram/public-channel', async (req, res) => {
+app.post('/api/telegram/public-channel', requireAdmin, async (req, res) => {
   telegramRuntimeSettings.publicChannelEnabled = req.body?.enabled !== false;
   saveState();
   const delivery = telegramRuntimeSettings.publicChannelEnabled
@@ -4619,7 +5171,7 @@ app.post('/api/telegram/public-channel', async (req, res) => {
     delivery
   });
 });
-app.post('/api/telegram/subscribers/sync', (req, res) => {
+app.post('/api/telegram/subscribers/sync', requireAdmin, (req, res) => {
   const subscribers = Array.isArray(req.body?.subscribers) ? req.body.subscribers : [];
   upsertTelegramSubscribers(subscribers);
   res.json({
@@ -4630,7 +5182,7 @@ app.post('/api/telegram/subscribers/sync', (req, res) => {
     }))
   });
 });
-app.post('/api/telegram/subscribers/refresh', async (_req, res) => {
+app.post('/api/telegram/subscribers/refresh', requireAdmin, async (_req, res) => {
   await syncTelegramSubscribersFromBot();
   res.json({
     ok: true,
@@ -4640,7 +5192,7 @@ app.post('/api/telegram/subscribers/refresh', async (_req, res) => {
     }))
   });
 });
-app.post('/api/telegram/test', async (_req, res) => {
+app.post('/api/telegram/test', requireAdmin, async (_req, res) => {
   try {
     const title = `New Signal ${formatTradeIdLabel(0)}`;
     const message = 'SPOT | BTCUSDT LONG | Direction ENTRY | Entry price 68,420.50 | TP 2.63% | SL -1.05% | Duration -- | Execution live_accepted';
@@ -4654,7 +5206,7 @@ app.post('/api/telegram/test', async (_req, res) => {
     res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Telegram test failed.' });
   }
 });
-app.post('/api/telegram/test/private', async (req, res) => {
+app.post('/api/telegram/test/private', requireAdmin, async (req, res) => {
   try {
     const accountId = String(req.body?.accountId ?? '').trim();
     const subscriber = telegramSubscribers.find(item => item.accountId === accountId);
@@ -4676,8 +5228,8 @@ app.post('/api/telegram/test/private', async (req, res) => {
     res.status(500).json({ ok: false, message: error instanceof Error ? error.message : 'Private Telegram test failed.' });
   }
 });
-app.get('/api/binance/connection', async (_req, res) => {
-  if (!fs.existsSync(BINANCE_VAULT_FILE)) {
+app.get('/api/binance/connection', requireAuth, async (_req, res) => {
+  if (!readSecureSetting<StoredBinanceVault>('binance_vault') && !fs.existsSync(BINANCE_VAULT_FILE)) {
     res.json(binanceVaultState);
     return;
   }
@@ -4688,7 +5240,7 @@ app.get('/api/binance/connection', async (_req, res) => {
     res.json(binanceVaultState);
   }
 });
-app.get('/api/binance/wallet', async (_req, res) => {
+app.get('/api/binance/wallet', requireAuth, async (_req, res) => {
   try {
     const wallet = await readBinanceWalletSummary();
     res.json(wallet);
@@ -4708,7 +5260,7 @@ app.get('/api/binance/wallet', async (_req, res) => {
     });
   }
 });
-app.post('/api/binance/futures/close-all', async (_req, res) => {
+app.post('/api/binance/futures/close-all', requireAdmin, async (_req, res) => {
   try {
     const result = await closeAllOpenFuturesPositions('Close All Futures');
     binanceWalletCache = null;
@@ -4717,7 +5269,7 @@ app.post('/api/binance/futures/close-all', async (_req, res) => {
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : 'Unable to close Binance Futures positions.' });
   }
 });
-app.post('/api/binance/connection', async (req, res) => {
+app.post('/api/binance/connection', requireAdmin, rateLimit('binance-connection', { windowMs: 15 * 60 * 1000, max: 5 }), async (req, res) => {
   const apiKey = String(req.body.apiKey ?? '').trim();
   const secretKey = String(req.body.secretKey ?? '').trim();
   if (!apiKey || !secretKey) {
@@ -4744,7 +5296,7 @@ app.post('/api/binance/connection', async (req, res) => {
     });
   }
 });
-app.delete('/api/binance/connection', (_req, res) => {
+app.delete('/api/binance/connection', requireAdmin, (_req, res) => {
   clearBinanceVault();
   res.json({ ok: true, ...binanceVaultState });
 });
@@ -4765,6 +5317,7 @@ async function runStartupStep(label: string, task: () => Promise<unknown>) {
 }
 
 async function initializeRuntime() {
+  loadAuthUsers();
   loadState();
   loadTelegramSubscribers();
   loadBinanceVault();
