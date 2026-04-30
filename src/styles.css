@@ -12842,3 +12842,250 @@ video {
     min-width: 112px;
   }
 }
+
+/* Phone natural fit: no horizontal scroll for cards/filters/strategy grids */
+@media (max-width: 820px) {
+  .page-dashboard .performance-command,
+  .page-dashboard .performance-summary,
+  .page-dashboard .ledger-wrap,
+  .page-auto-trade .portfolio-card,
+  .page-auto-trade .portfolio-ledger-section,
+  .page-auto-trade .public-ops-panel,
+  .page-auto-trade .public-strategies-card,
+  .page-auto-trade .admin-strategy-control,
+  .page-auto-trade .live-rules-shell,
+  .page-auto-trade .admin-personal-panel {
+    overflow-x: hidden;
+  }
+
+  .page-dashboard .trade-extremes,
+  .page-auto-trade .trade-extremes,
+  .page-dashboard .strategy-scorecards,
+  .page-auto-trade .strategy-scorecards,
+  .page-auto-trade .public-strategy-grid,
+  .page-auto-trade .admin-strategy-grid,
+  .page-dashboard .command-summary,
+  .page-auto-trade .command-summary {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+    overflow-y: visible;
+    padding-bottom: 0;
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom,
+  .page-auto-trade .trade-extremes-row-top,
+  .page-auto-trade .trade-extremes-row-bottom,
+  .page-auto-trade .portfolio-ledger-meta-row {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .page-dashboard .trade-extreme-card,
+  .page-auto-trade .trade-extreme-card {
+    min-width: 0;
+    min-height: 82px;
+    padding: 7px;
+    border-radius: 12px;
+  }
+
+  .page-dashboard .trade-extremes strong,
+  .page-auto-trade .trade-extremes strong {
+    display: block;
+    overflow: hidden;
+    font-size: clamp(9px, 2.9vw, 13px);
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .trade-extremes span,
+  .page-dashboard .trade-extremes small,
+  .page-auto-trade .trade-extremes span,
+  .page-auto-trade .trade-extremes small {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: clamp(5.8px, 1.75vw, 7.5px);
+    line-height: 1.18;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .page-dashboard .strategy-scorecards,
+  .page-auto-trade .strategy-scorecards,
+  .page-auto-trade .public-strategy-grid,
+  .page-auto-trade .admin-strategy-grid {
+    display: grid;
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .page-dashboard .scorecard,
+  .page-dashboard .strategy-scorecards article,
+  .page-dashboard .strategy-scorecards button,
+  .page-auto-trade .scorecard,
+  .page-auto-trade .strategy-scorecards article,
+  .page-auto-trade .strategy-scorecards button,
+  .page-auto-trade .public-strategy-card,
+  .page-auto-trade .admin-strategy-card {
+    min-width: 0;
+    min-height: 102px;
+    padding: 6px;
+    border-radius: 12px;
+    gap: 4px;
+  }
+
+  .page-dashboard .scorecard strong,
+  .page-auto-trade .scorecard strong,
+  .page-auto-trade .public-strategy-card strong,
+  .page-auto-trade .admin-strategy-card strong {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: clamp(8px, 2.35vw, 10.5px);
+    line-height: 1.08;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .page-dashboard .scorecard small,
+  .page-dashboard .scorecard-caption,
+  .page-dashboard .scorecard-score,
+  .page-auto-trade .scorecard small,
+  .page-auto-trade .public-strategy-card span,
+  .page-auto-trade .public-strategy-card small,
+  .page-auto-trade .admin-strategy-card span {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: clamp(5.5px, 1.55vw, 7px);
+    line-height: 1.16;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+  }
+
+  .page-dashboard .risk-badge,
+  .page-dashboard .strategy-switch,
+  .page-auto-trade .risk-badge,
+  .page-auto-trade .strategy-switch,
+  .page-auto-trade .nav-badge {
+    min-height: 15px;
+    padding: 0 4px;
+    font-size: clamp(5px, 1.45vw, 6.5px);
+  }
+
+  .page-dashboard .scoreline,
+  .page-auto-trade .scoreline {
+    height: 4px;
+  }
+
+  .page-dashboard .command-summary,
+  .page-auto-trade .command-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .page-dashboard .command-summary article,
+  .page-auto-trade .command-summary article {
+    min-width: 0;
+    min-height: 84px;
+    padding: 7px;
+    border-radius: 12px;
+  }
+
+  .page-dashboard .command-summary strong,
+  .page-auto-trade .command-summary strong {
+    overflow: hidden;
+    font-size: clamp(10px, 3vw, 14px);
+    line-height: 1.08;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .page-dashboard .command-summary span,
+  .page-dashboard .command-summary small,
+  .page-auto-trade .command-summary span,
+  .page-auto-trade .command-summary small {
+    font-size: clamp(5.8px, 1.65vw, 7.5px);
+    line-height: 1.2;
+  }
+
+  .page-dashboard .signal-filters,
+  .page-auto-trade .signal-filters,
+  .page-auto-trade .portfolio-trade-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .page-dashboard .signal-filters > div,
+  .page-auto-trade .signal-filters > div,
+  .page-auto-trade .portfolio-filter-block,
+  .page-auto-trade .portfolio-trade-range {
+    min-width: 0;
+    overflow-x: hidden;
+    padding: 6px;
+  }
+
+  .page-dashboard .signal-filters button,
+  .page-auto-trade .signal-filters button,
+  .page-auto-trade .portfolio-filter-pills button {
+    min-height: 22px;
+    padding: 0 6px;
+    font-size: clamp(6px, 1.75vw, 8px);
+  }
+
+  .page-dashboard .signal-filters span,
+  .page-auto-trade .signal-filters span,
+  .page-auto-trade .portfolio-filter-block > span {
+    font-size: clamp(6px, 1.75vw, 8px);
+  }
+
+  .page-auto-trade .public-strategy-tools,
+  .page-auto-trade .public-ops-bottomline {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .page-auto-trade .public-ops-bottomline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-auto-trade .live-rules-panel-grid,
+  .page-auto-trade .live-rules-shell.open .live-rules-panel-grid {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .page-auto-trade .live-rules-panel-card {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .page-auto-trade .admin-personal-body {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .page-auto-trade .admin-personal-card,
+  .page-auto-trade .admin-personal-summary article {
+    min-width: 0;
+  }
+
+  .page-auto-trade .admin-personal-card-head strong,
+  .page-auto-trade .admin-personal-summary strong,
+  .page-auto-trade .live-rules-panel-card strong {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
