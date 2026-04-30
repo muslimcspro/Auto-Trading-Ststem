@@ -655,7 +655,7 @@ function loadAuthUsers() {
   if (process.env.ADMIN_PASSWORD) {
     const configuredAdmin = authUsers.find(user => user.role === 'admin');
     if (configuredAdmin) {
-      configuredAdmin.username = (process.env.ADMIN_USERNAME ?? configuredAdmin.username).trim();
+      configuredAdmin.username = (process.env.ADMIN_USERNAME ?? 'admin').trim();
       configuredAdmin.name = configuredAdmin.username;
       configuredAdmin.email = process.env.ADMIN_EMAIL ?? configuredAdmin.email;
       configuredAdmin.telegram = process.env.ADMIN_TELEGRAM ?? configuredAdmin.telegram;
