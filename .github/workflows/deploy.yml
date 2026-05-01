@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       reset_admin_password:
-        description: Generate a temporary admin password for this deployment
+        description: Apply ADMIN_PASSWORD secret to the admin account during this deployment
         required: true
-        default: 'true'
+        default: 'false'
         type: choice
         options:
           - 'true'
@@ -30,6 +30,13 @@ jobs:
       VPS_PORT: ${{ secrets.VPS_PORT }}
       VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
       VPS_USER: ${{ secrets.VPS_USER }}
+      PUBLIC_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLIC_TELEGRAM_BOT_TOKEN }}
+      PUBLIC_TELEGRAM_CHAT_ID: ${{ secrets.PUBLIC_TELEGRAM_CHAT_ID }}
+      PUBLIC_TELEGRAM_INVITE_URL: ${{ secrets.PUBLIC_TELEGRAM_INVITE_URL }}
+      PUBLIC_TELEGRAM_BOT_USERNAME: ${{ secrets.PUBLIC_TELEGRAM_BOT_USERNAME }}
+      PRIVATE_TELEGRAM_BOT_TOKEN: ${{ secrets.PRIVATE_TELEGRAM_BOT_TOKEN }}
+      PRIVATE_TELEGRAM_BOT_USERNAME: ${{ secrets.PRIVATE_TELEGRAM_BOT_USERNAME }}
+      GLASSNODE_API_KEY: ${{ secrets.GLASSNODE_API_KEY }}
       RESET_ADMIN_PASSWORD: ${{ github.event.inputs.reset_admin_password || 'false' }}
 
     steps:
@@ -79,16 +86,21 @@ jobs:
           set -euo pipefail
           PORT="${VPS_PORT:-22}"
           ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-          TEMP_ADMIN_PASSWORD_GENERATED=0
           if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
-            ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
-            TEMP_ADMIN_PASSWORD_GENERATED=1
+            : "${ADMIN_PASSWORD:?ADMIN_PASSWORD secret is required when reset_admin_password is true}"
           fi
           ADMIN_PASSWORD_B64="$(printf '%s' "${ADMIN_PASSWORD:-}" | base64 -w0)"
           ADMIN_USERNAME_B64="$(printf '%s' "$ADMIN_USERNAME" | base64 -w0)"
           SECRETS_MASTER_KEY_B64="$(printf '%s' "${SECRETS_MASTER_KEY:-}" | base64 -w0)"
+          PUBLIC_TELEGRAM_BOT_TOKEN_B64="$(printf '%s' "${PUBLIC_TELEGRAM_BOT_TOKEN:-}" | base64 -w0)"
+          PUBLIC_TELEGRAM_CHAT_ID_B64="$(printf '%s' "${PUBLIC_TELEGRAM_CHAT_ID:-}" | base64 -w0)"
+          PUBLIC_TELEGRAM_INVITE_URL_B64="$(printf '%s' "${PUBLIC_TELEGRAM_INVITE_URL:-}" | base64 -w0)"
+          PUBLIC_TELEGRAM_BOT_USERNAME_B64="$(printf '%s' "${PUBLIC_TELEGRAM_BOT_USERNAME:-}" | base64 -w0)"
+          PRIVATE_TELEGRAM_BOT_TOKEN_B64="$(printf '%s' "${PRIVATE_TELEGRAM_BOT_TOKEN:-}" | base64 -w0)"
+          PRIVATE_TELEGRAM_BOT_USERNAME_B64="$(printf '%s' "${PRIVATE_TELEGRAM_BOT_USERNAME:-}" | base64 -w0)"
+          GLASSNODE_API_KEY_B64="$(printf '%s' "${GLASSNODE_API_KEY:-}" | base64 -w0)"
           ssh -p "$PORT" -i ~/.ssh/trading71_vps "$VPS_USER@$VPS_HOST" \
-            "ADMIN_PASSWORD_B64='$ADMIN_PASSWORD_B64' ADMIN_USERNAME_B64='$ADMIN_USERNAME_B64' SECRETS_MASTER_KEY_B64='$SECRETS_MASTER_KEY_B64' bash -s" <<'EOF'
+            "ADMIN_PASSWORD_B64='$ADMIN_PASSWORD_B64' ADMIN_USERNAME_B64='$ADMIN_USERNAME_B64' SECRETS_MASTER_KEY_B64='$SECRETS_MASTER_KEY_B64' PUBLIC_TELEGRAM_BOT_TOKEN_B64='$PUBLIC_TELEGRAM_BOT_TOKEN_B64' PUBLIC_TELEGRAM_CHAT_ID_B64='$PUBLIC_TELEGRAM_CHAT_ID_B64' PUBLIC_TELEGRAM_INVITE_URL_B64='$PUBLIC_TELEGRAM_INVITE_URL_B64' PUBLIC_TELEGRAM_BOT_USERNAME_B64='$PUBLIC_TELEGRAM_BOT_USERNAME_B64' PRIVATE_TELEGRAM_BOT_TOKEN_B64='$PRIVATE_TELEGRAM_BOT_TOKEN_B64' PRIVATE_TELEGRAM_BOT_USERNAME_B64='$PRIVATE_TELEGRAM_BOT_USERNAME_B64' GLASSNODE_API_KEY_B64='$GLASSNODE_API_KEY_B64' bash -s" <<'EOF'
           set -euo pipefail
           cd /opt/trading71
           git pull --ff-only
@@ -98,7 +110,8 @@ jobs:
           CURRENT_ADMIN_PASSWORD="$(grep -m1 '^ADMIN_PASSWORD=' .env | cut -d= -f2- || true)"
           if [ -z "$ADMIN_PASSWORD" ]; then
             if [ -z "$CURRENT_ADMIN_PASSWORD" ]; then
-              ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
+              echo "ADMIN_PASSWORD is missing and no existing server password was found." >&2
+              exit 1
             else
               ADMIN_PASSWORD="$CURRENT_ADMIN_PASSWORD"
             fi
@@ -106,27 +119,33 @@ jobs:
           tmp_env="$(mktemp)"
           if [ -n "$SECRETS_MASTER_KEY_B64" ]; then
             SECRETS_MASTER_KEY="$(printf '%s' "$SECRETS_MASTER_KEY_B64" | base64 -d)"
-            grep -v -E '^(ADMIN_PASSWORD|ADMIN_USERNAME|SECRETS_MASTER_KEY)=' .env > "$tmp_env" || true
+            grep -v -E '^(ADMIN_PASSWORD|ADMIN_USERNAME|SECRETS_MASTER_KEY|PUBLIC_TELEGRAM_BOT_TOKEN|PUBLIC_TELEGRAM_CHAT_ID|PUBLIC_TELEGRAM_INVITE_URL|PUBLIC_TELEGRAM_BOT_USERNAME|PRIVATE_TELEGRAM_BOT_TOKEN|PRIVATE_TELEGRAM_BOT_USERNAME|GLASSNODE_API_KEY)=' .env > "$tmp_env" || true
           else
-            grep -v -E '^(ADMIN_PASSWORD|ADMIN_USERNAME)=' .env > "$tmp_env" || true
+            grep -v -E '^(ADMIN_PASSWORD|ADMIN_USERNAME|PUBLIC_TELEGRAM_BOT_TOKEN|PUBLIC_TELEGRAM_CHAT_ID|PUBLIC_TELEGRAM_INVITE_URL|PUBLIC_TELEGRAM_BOT_USERNAME|PRIVATE_TELEGRAM_BOT_TOKEN|PRIVATE_TELEGRAM_BOT_USERNAME|GLASSNODE_API_KEY)=' .env > "$tmp_env" || true
           fi
           printf 'ADMIN_USERNAME=%s\n' "$ADMIN_USERNAME" >> "$tmp_env"
           printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD" >> "$tmp_env"
           if [ -n "${SECRETS_MASTER_KEY:-}" ]; then
             printf 'SECRETS_MASTER_KEY=%s\n' "$SECRETS_MASTER_KEY" >> "$tmp_env"
           fi
+          for encoded_name in \
+            PUBLIC_TELEGRAM_BOT_TOKEN_B64 \
+            PUBLIC_TELEGRAM_CHAT_ID_B64 \
+            PUBLIC_TELEGRAM_INVITE_URL_B64 \
+            PUBLIC_TELEGRAM_BOT_USERNAME_B64 \
+            PRIVATE_TELEGRAM_BOT_TOKEN_B64 \
+            PRIVATE_TELEGRAM_BOT_USERNAME_B64 \
+            GLASSNODE_API_KEY_B64
+          do
+            encoded_value="${!encoded_name}"
+            if [ -n "$encoded_value" ]; then
+              plain_name="${encoded_name%_B64}"
+              plain_value="$(printf '%s' "$encoded_value" | base64 -d)"
+              printf '%s=%s\n' "$plain_name" "$plain_value" >> "$tmp_env"
+            fi
+          done
           mv "$tmp_env" .env
+          chmod 600 .env
           docker compose -f docker-compose.oracle.yml up -d --build
           docker compose -f docker-compose.oracle.yml ps
           EOF
-          if [ "$TEMP_ADMIN_PASSWORD_GENERATED" = "1" ]; then
-            {
-              echo "## Temporary admin login"
-              echo ""
-              echo "Username: \`$ADMIN_USERNAME\`"
-              echo ""
-              echo "Password: \`$ADMIN_PASSWORD\`"
-              echo ""
-              echo "Use it once, then change it inside the app."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi

@@ -256,7 +256,6 @@ const BINANCE_VAULT_KEY_FILE = path.join(DATA_DIR, 'binance-vault.key');
 const AUTH_USERS_FILE = path.join(DATA_DIR, 'auth-users.json');
 const AUTH_SESSION_KEY_FILE = path.join(DATA_DIR, 'auth-session.key');
 const SIGNAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-const TELEGRAM_CONFIG_FILE = path.join(ROOT_DIR, 'start-system.bat');
 const CANDLE_LIMIT_DEFAULT = 80;
 const CANDLE_LIMIT_CHART = 240;
 const SCAN_BATCH_SIZE: Record<Timeframe, number> = {
@@ -340,28 +339,12 @@ function formatTradeIdLabel(id: number) {
   return `T-${Math.max(0, id).toString(36).toUpperCase().padStart(6, '0')}`;
 }
 
-function readTelegramFallbackConfig() {
-  if (!fs.existsSync(TELEGRAM_CONFIG_FILE)) return {};
-  const file = fs.readFileSync(TELEGRAM_CONFIG_FILE, 'utf8');
-  const publicToken = file.match(/set\s+"PUBLIC_TELEGRAM_BOT_TOKEN=([^"\r\n]+)"/i)?.[1]?.trim()
-    ?? file.match(/set\s+"TELEGRAM_BOT_TOKEN=([^"\r\n]+)"/i)?.[1]?.trim();
-  const publicChatId = file.match(/set\s+"PUBLIC_TELEGRAM_CHAT_ID=([^"\r\n]+)"/i)?.[1]?.trim()
-    ?? file.match(/set\s+"TELEGRAM_CHAT_ID=([^"\r\n]+)"/i)?.[1]?.trim();
-  const publicBotUsername = file.match(/set\s+"PUBLIC_TELEGRAM_BOT_USERNAME=([^"\r\n]+)"/i)?.[1]?.trim()
-    ?? (typeof publicChatId === 'string' && publicChatId.startsWith('@') ? publicChatId.replace(/^@/, '') : undefined);
-  const publicInviteUrl = file.match(/set\s+"PUBLIC_TELEGRAM_INVITE_URL=([^"\r\n]+)"/i)?.[1]?.trim();
-  const privateToken = file.match(/set\s+"PRIVATE_TELEGRAM_BOT_TOKEN=([^"\r\n]+)"/i)?.[1]?.trim();
-  const privateBotUsername = file.match(/set\s+"PRIVATE_TELEGRAM_BOT_USERNAME=([^"\r\n]+)"/i)?.[1]?.trim();
-  return { publicToken, publicChatId, publicBotUsername, publicInviteUrl, privateToken, privateBotUsername };
-}
-
-const telegramFallback = readTelegramFallbackConfig();
-const PUBLIC_TELEGRAM_BOT_TOKEN = (process.env.PUBLIC_TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? telegramFallback.publicToken ?? '').trim();
-const PUBLIC_TELEGRAM_CHAT_ID = (process.env.PUBLIC_TELEGRAM_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? telegramFallback.publicChatId ?? '@Autotradingbot71').trim();
-const PUBLIC_TELEGRAM_BOT_USERNAME = (process.env.PUBLIC_TELEGRAM_BOT_USERNAME ?? telegramFallback.publicBotUsername ?? 'Autotradingbot71').trim();
-const PUBLIC_TELEGRAM_INVITE_URL = (process.env.PUBLIC_TELEGRAM_INVITE_URL ?? telegramFallback.publicInviteUrl ?? '').trim();
-const PRIVATE_TELEGRAM_BOT_TOKEN = (process.env.PRIVATE_TELEGRAM_BOT_TOKEN ?? telegramFallback.privateToken ?? '').trim();
-const PRIVATE_TELEGRAM_BOT_USERNAME = (process.env.PRIVATE_TELEGRAM_BOT_USERNAME ?? telegramFallback.privateBotUsername ?? '').trim();
+const PUBLIC_TELEGRAM_BOT_TOKEN = (process.env.PUBLIC_TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? '').trim();
+const PUBLIC_TELEGRAM_CHAT_ID = (process.env.PUBLIC_TELEGRAM_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? '@Autotradingbot71').trim();
+const PUBLIC_TELEGRAM_BOT_USERNAME = (process.env.PUBLIC_TELEGRAM_BOT_USERNAME ?? 'Autotradingbot71').trim();
+const PUBLIC_TELEGRAM_INVITE_URL = (process.env.PUBLIC_TELEGRAM_INVITE_URL ?? '').trim();
+const PRIVATE_TELEGRAM_BOT_TOKEN = (process.env.PRIVATE_TELEGRAM_BOT_TOKEN ?? '').trim();
+const PRIVATE_TELEGRAM_BOT_USERNAME = (process.env.PRIVATE_TELEGRAM_BOT_USERNAME ?? '').trim();
 
 process.on('unhandledRejection', error => {
   console.error('[runtime] unhandled rejection', error);
