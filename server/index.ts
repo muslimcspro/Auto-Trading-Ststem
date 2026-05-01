@@ -5133,7 +5133,7 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
       signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
-    if (cached && Date.now() - cached.createdAt < 1200) {
+    if (cached && Date.now() - cached.createdAt < 0) {
       res.json(cached.payload);
       return;
     }
@@ -5271,7 +5271,7 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
       signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
-    if (cached && Date.now() - cached.createdAt < 1200) {
+    if (cached && Date.now() - cached.createdAt < 0) {
       res.json(cached.payload);
       return;
     }

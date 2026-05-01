@@ -818,13 +818,13 @@ function App() {
         {page === 'dashboard' && <DashboardPage
           stats={deferredStats}
           signals={deferredSignals}
-          tickers={deferredTickers}
-          futuresTickers={deferredFuturesTickers}
+          tickers={tickers}
+          futuresTickers={futuresTickers}
           notifications={deferredNotifications}
           selected={selected}
           labStrategyIds={labStrategyIds}
         />}
-        {page === 'auto-trade' && <AutoTradePage signals={deferredSignals} strategies={strategies} labStrategyIds={labStrategyIds} setLabStrategyIds={setLabStrategyIds} strategyMarketScope={strategyMarketScope} tickers={deferredTickers} futuresTickers={deferredFuturesTickers} selected={selected} timeframes={timeframes} saveSelection={saveSelection} />}
+        {page === 'auto-trade' && <AutoTradePage signals={deferredSignals} strategies={strategies} labStrategyIds={labStrategyIds} setLabStrategyIds={setLabStrategyIds} strategyMarketScope={strategyMarketScope} tickers={tickers} futuresTickers={futuresTickers} selected={selected} timeframes={timeframes} saveSelection={saveSelection} />}
       </main>
       <ToastStack notifications={toasts} onDismiss={(id) => setToasts(prev => prev.filter(item => item.id !== id))} signals={deferredSignals} />
       {chartOpen && <SymbolChartPanel
