@@ -1574,7 +1574,7 @@ function buildLiveExecutionRulesPatch(input: Partial<LiveExecutionRules>): LiveE
   return {
     venueMode: (input.venueMode === 'futures' || input.venueMode === 'both' ? input.venueMode : 'spot') as ExecutionVenue,
     executionMode: input.executionMode === 'live' ? 'live' : 'test',
-    killSwitch: input.killSwitch !== false,
+    killSwitch: false,
     ruleToggles: {
       tradingVenue: input.ruleToggles?.tradingVenue !== false,
       allowedDirection: input.ruleToggles?.allowedDirection !== false,
@@ -2046,15 +2046,6 @@ async function monitorLiveFuturesProtection() {
 
     if (active.length === 0) return;
 
-    if (liveExecutionRules.killSwitch) {
-      for (const item of active) {
-        await closeFuturesPosition(item.signal, item.position, 'Kill Switch emergency close');
-      }
-      portfolioFloorArmed = false;
-      portfolioFloorPeakR = 0;
-      return;
-    }
-
     if (liveExecutionRules.portfolioFloorEnabled) {
       const portfolioFloor = getDynamicPortfolioFloor(active);
       if (portfolioFloor.portfolioR >= portfolioFloor.armR) {
@@ -2144,7 +2135,6 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
   const riskControlUntil = futuresRiskControlCooldown.get(signal.symbol) ?? 0;
   if (signal.market === 'futures' && riskControlUntil > Date.now()) failedRules.push('Binance Symbol Risk Control');
   if (riskControlUntil && riskControlUntil <= Date.now()) futuresRiskControlCooldown.delete(signal.symbol);
-  if (rules.killSwitch) failedRules.push('Kill Switch');
   if (rules.ruleToggles.tradingVenue && rules.venueMode !== 'both' && signal.market !== rules.venueMode) failedRules.push('Trading Venue');
   if (signal.market === 'spot' && signal.side !== 'LONG') failedRules.push('Allowed Direction');
   if (signal.market === 'futures' && rules.ruleToggles.allowedDirection && rules.allowedDirection === 'long-only' && signal.side !== 'LONG') failedRules.push('Allowed Direction');
@@ -2303,7 +2293,7 @@ async function applyExecutionPipeline(signal: TradeSignal) {
     return;
   }
   if (result.failedRules.length > 0) {
-    signal.executionStatus = result.failedRules.includes('Kill Switch') ? 'blocked' : 'rejected';
+    signal.executionStatus = 'rejected';
     signal.executionNotes = result.failedRules;
     return;
   }
@@ -2667,7 +2657,7 @@ function loadState() {
       },
       venueMode: data.liveExecutionRules.venueMode === 'futures' || data.liveExecutionRules.venueMode === 'both' ? data.liveExecutionRules.venueMode : 'spot',
       executionMode: data.liveExecutionRules.executionMode === 'live' ? 'live' : 'test',
-      killSwitch: data.liveExecutionRules.killSwitch !== false,
+      killSwitch: false,
       executionSource: data.liveExecutionRules.executionSource === 'top-2' || data.liveExecutionRules.executionSource === 'top-4' || data.liveExecutionRules.executionSource === 'custom' ? data.liveExecutionRules.executionSource : 'best-single',
       allocationMethod: 'equal',
       minRiskReward: data.liveExecutionRules.minRiskReward === '1:1' || data.liveExecutionRules.minRiskReward === '1:3' || data.liveExecutionRules.minRiskReward === '1:4' || data.liveExecutionRules.minRiskReward === 'custom' ? data.liveExecutionRules.minRiskReward : '1:2',

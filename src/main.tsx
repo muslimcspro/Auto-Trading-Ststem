@@ -1838,7 +1838,6 @@ function AutoTradePage({
   const [portfolioFloorTriggerPct, setPortfolioFloorTriggerPct] = useState(() => readAutoTradeSetting('autoTrade.portfolioFloorTriggerPct', '13'));
   const [portfolioFloorLockPct, setPortfolioFloorLockPct] = useState(() => readAutoTradeSetting('autoTrade.portfolioFloorLockPct', '8'));
   const [liveExecutionMode, setLiveExecutionMode] = useState<'test' | 'live'>(() => readAutoTradeSetting('autoTrade.liveExecutionMode', 'live') === 'live' ? 'live' : 'test');
-  const [liveKillSwitch, setLiveKillSwitch] = useState(() => readAutoTradeSetting('autoTrade.liveKillSwitch', 'false') !== 'false');
   const [, setLiveRuleToggles] = useState<LiveRulesPayload['ruleToggles']>(defaultLiveRuleToggles);
   const [executionSource, setExecutionSource] = useState<'best-single' | 'top-2' | 'top-4' | 'custom'>(() => {
     const saved = readAutoTradeSetting('autoTrade.executionSource', 'best-single');
@@ -2328,7 +2327,7 @@ function AutoTradePage({
         body: JSON.stringify({
           venueMode,
           executionMode: liveExecutionMode,
-          killSwitch: liveKillSwitch,
+          killSwitch: false,
           ruleToggles: effectiveRuleToggles,
           liveActivationConfirmed: portalView === 'admin' && liveExecutionMode === 'live',
           riskPerTrade: Number(riskPerTrade),
@@ -2373,7 +2372,6 @@ function AutoTradePage({
       localStorage.setItem('autoTrade.portfolioFloorTriggerPct', String(response.rules.portfolioFloorTriggerPct));
       localStorage.setItem('autoTrade.portfolioFloorLockPct', String(response.rules.portfolioFloorLockPct));
       localStorage.setItem('autoTrade.liveExecutionMode', response.rules.executionMode);
-      localStorage.setItem('autoTrade.liveKillSwitch', String(response.rules.killSwitch));
       setLiveRuleToggles({ ...defaultLiveRuleToggles, ...(response.rules.ruleToggles ?? {}) });
       setMaxTrades(String(response.rules.maxTrades));
       setDailyLoss(String(response.rules.dailyLoss));
@@ -2390,7 +2388,7 @@ function AutoTradePage({
       localStorage.setItem('autoTrade.customRiskReward', customRiskReward);
       localStorage.setItem('autoTrade.allowedDirection', venueMode === 'spot' ? 'long-only' : allowedDirection);
       localStorage.setItem('autoTrade.venueMode', venueMode);
-      setRulesSaveMessage(`Settings auto-saved. Execution mode: ${response.rules.executionMode.toUpperCase()}${response.rules.killSwitch ? ' with kill switch ON.' : '.'}`);
+      setRulesSaveMessage(`Settings auto-saved. Execution mode: ${response.rules.executionMode.toUpperCase()}.`);
     } catch {
       setRulesSaveMessage('Save failed.');
     }
@@ -2556,7 +2554,6 @@ function AutoTradePage({
     const autoSaveKey = JSON.stringify({
       venueMode,
       liveExecutionMode,
-      liveKillSwitch,
       riskPerTrade,
       maxTrades,
       customOpenTradeLimit,
@@ -2590,7 +2587,7 @@ function AutoTradePage({
     return () => {
       if (liveRulesAutoSaveTimerRef.current) window.clearTimeout(liveRulesAutoSaveTimerRef.current);
     };
-  }, [venueMode, liveExecutionMode, liveKillSwitch, riskPerTrade, maxTrades, customOpenTradeLimit, dailyLoss, customDailyLossLimit, reserveRatio, minRiskReward, customRiskReward, allowedDirection, futuresLeverage, futuresMarginMode, breakEvenEnabled, breakEvenTriggerPct, trailingStopEnabled, trailingGapPct, portfolioFloorEnabled, portfolioFloorTriggerPct, portfolioFloorLockPct]);
+  }, [venueMode, liveExecutionMode, riskPerTrade, maxTrades, customOpenTradeLimit, dailyLoss, customDailyLossLimit, reserveRatio, minRiskReward, customRiskReward, allowedDirection, futuresLeverage, futuresMarginMode, breakEvenEnabled, breakEvenTriggerPct, trailingStopEnabled, trailingGapPct, portfolioFloorEnabled, portfolioFloorTriggerPct, portfolioFloorLockPct]);
   const riskBudget = capitalValue * (riskValue / 100);
   const splitFour = deployableCapital / 4;
   const splitTwo = deployableCapital / 2;
@@ -3282,7 +3279,6 @@ function AutoTradePage({
       .then(({ rules }) => {
         setVenueMode(rules.venueMode === 'futures' || rules.venueMode === 'both' ? rules.venueMode : 'spot');
         setLiveExecutionMode(rules.executionMode === 'live' ? 'live' : 'test');
-        setLiveKillSwitch(Boolean(rules.killSwitch));
         setLiveRuleToggles({ ...defaultLiveRuleToggles, ...(rules.ruleToggles ?? {}) });
         setRiskPerTrade(String(rules.riskPerTrade));
         setMaxTrades(String(rules.maxTrades));
@@ -3354,7 +3350,6 @@ function AutoTradePage({
       localStorage.setItem('autoTrade.futuresLeverage', futuresLeverage);
       localStorage.setItem('autoTrade.futuresMarginMode', futuresMarginMode);
       localStorage.setItem('autoTrade.liveExecutionMode', liveExecutionMode);
-      localStorage.setItem('autoTrade.liveKillSwitch', String(liveKillSwitch));
       localStorage.setItem('autoTrade.executionSource', executionSource);
       localStorage.setItem('autoTrade.allocationMethod', allocationMethod);
       localStorage.setItem('autoTrade.allowedDirection', allowedDirection);
@@ -3366,7 +3361,7 @@ function AutoTradePage({
     } catch {
       // Ignore storage issues and keep the in-memory state working.
     }
-  }, [allocationMethod, allowedDirection, autoMode, breakEvenEnabled, breakEvenTriggerPct, capital, customRiskReward, dailyLoss, drawdownPause, executionSource, futuresLeverage, futuresMarginMode, liveExecutionMode, liveKillSwitch, maxLossStreak, maxStrategyExposure, maxTrades, memberName, minRiskReward, portfolioFloorEnabled, portfolioFloorLockPct, portfolioFloorTriggerPct, portalView, reserveRatio, riskPerTrade, trailingGapPct, trailingStopEnabled, venueMode]);
+  }, [allocationMethod, allowedDirection, autoMode, breakEvenEnabled, breakEvenTriggerPct, capital, customRiskReward, dailyLoss, drawdownPause, executionSource, futuresLeverage, futuresMarginMode, liveExecutionMode, maxLossStreak, maxStrategyExposure, maxTrades, memberName, minRiskReward, portfolioFloorEnabled, portfolioFloorLockPct, portfolioFloorTriggerPct, portalView, reserveRatio, riskPerTrade, trailingGapPct, trailingStopEnabled, venueMode]);
 
   useEffect(() => {
     if (!rulesSaveMessage) return;
@@ -4071,23 +4066,6 @@ function AutoTradePage({
                 </div>
                 <small className="selection-footnote">{portalView === 'admin' ? 'Live orders require an explicit save from the admin.' : 'Only admin can switch between test and live execution.'}</small>
               </div>
-              <div className="selection-control-card">
-                <span className="field-label-inline"><FieldHint label="Kill Switch" hint="When ON, the server blocks all new Binance orders even if a trade passes the rules." /><small className="field-priority">Safety</small></span>
-                <div className="selection-pill-row">
-                  {([
-                    [true, 'On'],
-                    [false, 'Off']
-                  ] as const).map(([value, label]) => <button
-                    key={label}
-                    className={liveKillSwitch === value ? 'active' : ''}
-                    onClick={() => setLiveKillSwitch(value)}
-                    disabled={portalView !== 'admin'}
-                  >
-                    {label}
-                  </button>)}
-                </div>
-                <small className="selection-footnote">{liveKillSwitch ? 'Kill switch is currently blocking all new live orders.' : 'Kill switch is off. Orders can proceed if every rule passes.'}</small>
-              </div>
             </div>
             <div className="shadow-rule-grid">
               <label>
@@ -4192,7 +4170,6 @@ function AutoTradePage({
               <div className="live-rules-badge-row">
                 <span className="nav-badge subtle">{venueMode === 'both' ? 'Both' : venueMode === 'spot' ? 'Spot' : 'Futures'}</span>
                 <span className={`nav-badge ${liveExecutionMode === 'live' ? 'glow' : 'subtle'}`}>{liveExecutionMode === 'live' ? 'Live' : 'Test'}</span>
-                {liveKillSwitch && <span className="nav-badge subtle">Kill Switch</span>}
                 {liveRulesOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
               </div>
             </button>
@@ -4204,6 +4181,16 @@ function AutoTradePage({
                 </div>
                 <div className="live-venue-direction-controls">
                   <div className="venue-switch">
+                    <button
+                      type="button"
+                      className={venueMode === 'both' ? 'active' : ''}
+                      onClick={() => {
+                        setVenueMode('both');
+                        if (allowedDirection === 'long-only') setAllowedDirection('both');
+                      }}
+                    >
+                      Both
+                    </button>
                     <button type="button" className={venueMode === 'spot' ? 'active' : ''} onClick={() => setVenueMode('spot')}>Spot</button>
                     <button
                       type="button"
@@ -4214,16 +4201,6 @@ function AutoTradePage({
                       }}
                     >
                       Futures
-                    </button>
-                    <button
-                      type="button"
-                      className={venueMode === 'both' ? 'active' : ''}
-                      onClick={() => {
-                        setVenueMode('both');
-                        if (allowedDirection === 'long-only') setAllowedDirection('both');
-                      }}
-                    >
-                      Both
                     </button>
                   </div>
                   {venueMode === 'spot' && <small className="selection-footnote">Spot execution accepts long-only buy orders.</small>}
@@ -4293,22 +4270,6 @@ function AutoTradePage({
                 >
                   Close All Spot + Futures
                 </button>}
-              </div>
-              <div className="selection-control-card live-rules-panel-card">
-                <span className="field-label-inline"><FieldHint label="Kill Switch" hint="When ON, the server blocks new orders and emergency-closes matched live Binance Futures positions." /><small className="field-priority">Safety</small></span>
-                <div className="selection-pill-row">
-                  {([
-                    [true, 'On'],
-                    [false, 'Off']
-                  ] as const).map(([value, label]) => <button
-                    key={label}
-                    className={liveKillSwitch === value ? 'active' : ''}
-                    onClick={() => portalView === 'admin' && setLiveKillSwitch(value)}
-                    disabled={portalView !== 'admin'}
-                  >
-                    {label}
-                  </button>)}
-                </div>
               </div>
               <div className="selection-control-card live-rules-panel-card live-rule-wide">
                 <span className="field-label-inline"><FieldHint label="Open Trade Limit" hint="Unlimited bypasses the limit. Custom keeps a fixed maximum number of concurrent accepted trades." /><small className="field-priority">Core</small></span>
