@@ -652,25 +652,50 @@ function loadAuthUsers() {
     saveAuthUsers();
     removeMigratedSecretFile(AUTH_USERS_FILE);
   }
-  if (process.env.ADMIN_PASSWORD) {
-    const configuredAdmin = authUsers.find(user => user.role === 'admin');
-    if (configuredAdmin) {
-      configuredAdmin.username = (process.env.ADMIN_USERNAME ?? 'admin').trim();
-      configuredAdmin.name = configuredAdmin.username;
-      configuredAdmin.email = process.env.ADMIN_EMAIL ?? configuredAdmin.email;
-      configuredAdmin.telegram = process.env.ADMIN_TELEGRAM ?? configuredAdmin.telegram;
-      configuredAdmin.phone = process.env.ADMIN_PHONE ?? configuredAdmin.phone;
-      configuredAdmin.passwordHash = hashPassword(process.env.ADMIN_PASSWORD.trim());
-      configuredAdmin.status = 'approved';
-      configuredAdmin.enabled = true;
-      upsertAuthUser(configuredAdmin);
+
+  const configuredAdminPassword = process.env.ADMIN_PASSWORD?.trim();
+  if (configuredAdminPassword) {
+    const adminUsername = (process.env.ADMIN_USERNAME ?? 'admin').trim() || 'admin';
+    const existingAdmin = authUsers.find(user => user.role === 'admin');
+    const passwordFingerprint = crypto.createHash('sha256').update(configuredAdminPassword).digest('hex');
+    const appliedFingerprint = readSecureSetting<string>('admin_password_env_fingerprint');
+    if (existingAdmin && appliedFingerprint === passwordFingerprint) {
+      if (!existingAdmin.enabled || existingAdmin.status !== 'approved') {
+        existingAdmin.status = 'approved';
+        existingAdmin.enabled = true;
+        existingAdmin.approvedAt = existingAdmin.approvedAt ?? Date.now();
+        upsertAuthUser(existingAdmin);
+      }
+      console.info(`[auth] configured admin account ready: username=${existingAdmin.username}`);
+      return;
     }
+    const configuredAdmin: AuthUser = {
+      id: 'ADMIN',
+      role: 'admin',
+      username: adminUsername,
+      name: adminUsername,
+      email: process.env.ADMIN_EMAIL ?? existingAdmin?.email ?? 'admin@local.test',
+      telegram: process.env.ADMIN_TELEGRAM ?? existingAdmin?.telegram ?? '',
+      phone: process.env.ADMIN_PHONE ?? existingAdmin?.phone ?? '',
+      passwordHash: hashPassword(configuredAdminPassword),
+      status: 'approved',
+      enabled: true,
+      telegramNotificationsEnabled: existingAdmin?.telegramNotificationsEnabled ?? true,
+      createdAt: existingAdmin?.createdAt ?? Date.now(),
+      approvedAt: existingAdmin?.approvedAt ?? Date.now()
+    };
+    authUsers = [configuredAdmin, ...authUsers.filter(user => user.role !== 'admin')];
+    saveAuthUsers();
+    writeSecureSetting('admin_password_env_fingerprint', passwordFingerprint);
+    console.info(`[auth] configured admin account ready: username=${adminUsername}`);
+    return;
   }
+
   if (authUsers.some(user => user.role === 'admin')) return;
   if (process.env.NODE_ENV === 'production') {
     throw new Error('ADMIN_PASSWORD is required before creating the first production admin account.');
   }
-  const bootstrapPassword = (process.env.ADMIN_PASSWORD ?? crypto.randomBytes(18).toString('base64url')).trim();
+  const bootstrapPassword = crypto.randomBytes(18).toString('base64url');
   const adminUsername = (process.env.ADMIN_USERNAME ?? 'admin').trim();
   authUsers.push({
     id: 'ADMIN',

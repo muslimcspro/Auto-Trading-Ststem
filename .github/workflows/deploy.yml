@@ -5,6 +5,15 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      reset_admin_password:
+        description: Generate a temporary admin password for this deployment
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 concurrency:
   group: trading71-production
@@ -15,15 +24,31 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
       SECRETS_MASTER_KEY: ${{ secrets.SECRETS_MASTER_KEY }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_PORT: ${{ secrets.VPS_PORT }}
       VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
       VPS_USER: ${{ secrets.VPS_USER }}
+      RESET_ADMIN_PASSWORD: ${{ github.event.inputs.reset_admin_password || 'false' }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Validate deployment secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in VPS_HOST VPS_SSH_KEY_B64 VPS_USER; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Missing GitHub Secret::$name is required for deployment."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -52,24 +77,47 @@ jobs:
       - name: Deploy on VPS
         run: |
           set -euo pipefail
-          : "${ADMIN_PASSWORD:?ADMIN_PASSWORD secret is required}"
-          : "${SECRETS_MASTER_KEY:?SECRETS_MASTER_KEY secret is required}"
           PORT="${VPS_PORT:-22}"
-          ADMIN_PASSWORD_B64="$(printf '%s' "$ADMIN_PASSWORD" | base64 -w0)"
-          SECRETS_MASTER_KEY_B64="$(printf '%s' "$SECRETS_MASTER_KEY" | base64 -w0)"
+          ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+          ADMIN_PASSWORD_B64="$(printf '%s' "${ADMIN_PASSWORD:-}" | base64 -w0)"
+          ADMIN_USERNAME_B64="$(printf '%s' "$ADMIN_USERNAME" | base64 -w0)"
+          SECRETS_MASTER_KEY_B64="$(printf '%s' "${SECRETS_MASTER_KEY:-}" | base64 -w0)"
           ssh -p "$PORT" -i ~/.ssh/trading71_vps "$VPS_USER@$VPS_HOST" \
-            "ADMIN_PASSWORD_B64='$ADMIN_PASSWORD_B64' SECRETS_MASTER_KEY_B64='$SECRETS_MASTER_KEY_B64' bash -s" <<'EOF'
+            "ADMIN_PASSWORD_B64='$ADMIN_PASSWORD_B64' ADMIN_USERNAME_B64='$ADMIN_USERNAME_B64' RESET_ADMIN_PASSWORD='$RESET_ADMIN_PASSWORD' SECRETS_MASTER_KEY_B64='$SECRETS_MASTER_KEY_B64' bash -s" <<'EOF'
           set -euo pipefail
           cd /opt/trading71
           git pull --ff-only
           ADMIN_PASSWORD="$(printf '%s' "$ADMIN_PASSWORD_B64" | base64 -d)"
-          SECRETS_MASTER_KEY="$(printf '%s' "$SECRETS_MASTER_KEY_B64" | base64 -d)"
+          ADMIN_USERNAME="$(printf '%s' "$ADMIN_USERNAME_B64" | base64 -d)"
           touch .env
+          CURRENT_ADMIN_PASSWORD="$(grep -m1 '^ADMIN_PASSWORD=' .env | cut -d= -f2- || true)"
+          TEMP_ADMIN_PASSWORD_GENERATED=0
+          if [ -z "$ADMIN_PASSWORD" ]; then
+            if [ "$RESET_ADMIN_PASSWORD" = "true" ] || [ -z "$CURRENT_ADMIN_PASSWORD" ]; then
+              ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
+              TEMP_ADMIN_PASSWORD_GENERATED=1
+            else
+              ADMIN_PASSWORD="$CURRENT_ADMIN_PASSWORD"
+            fi
+          fi
           tmp_env="$(mktemp)"
-          grep -v -E '^(ADMIN_PASSWORD|SECRETS_MASTER_KEY)=' .env > "$tmp_env" || true
+          if [ -n "$SECRETS_MASTER_KEY_B64" ]; then
+            SECRETS_MASTER_KEY="$(printf '%s' "$SECRETS_MASTER_KEY_B64" | base64 -d)"
+            grep -v -E '^(ADMIN_PASSWORD|ADMIN_USERNAME|SECRETS_MASTER_KEY)=' .env > "$tmp_env" || true
+          else
+            grep -v -E '^(ADMIN_PASSWORD|ADMIN_USERNAME)=' .env > "$tmp_env" || true
+          fi
+          printf 'ADMIN_USERNAME=%s\n' "$ADMIN_USERNAME" >> "$tmp_env"
           printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD" >> "$tmp_env"
-          printf 'SECRETS_MASTER_KEY=%s\n' "$SECRETS_MASTER_KEY" >> "$tmp_env"
+          if [ -n "${SECRETS_MASTER_KEY:-}" ]; then
+            printf 'SECRETS_MASTER_KEY=%s\n' "$SECRETS_MASTER_KEY" >> "$tmp_env"
+          fi
           mv "$tmp_env" .env
+          if [ "$TEMP_ADMIN_PASSWORD_GENERATED" = "1" ]; then
+            echo "::warning title=Temporary admin password generated::Use this password once, then change it inside the app."
+            echo "::notice title=Temporary admin username::$ADMIN_USERNAME"
+            echo "::notice title=Temporary admin password::$ADMIN_PASSWORD"
+          fi
           docker compose -f docker-compose.oracle.yml up -d --build
           docker compose -f docker-compose.oracle.yml ps
           EOF
