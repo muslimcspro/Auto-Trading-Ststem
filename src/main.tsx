@@ -44,6 +44,8 @@ type Signal = {
   closedAt?: number;
   closePrice?: number;
   binanceCloseOrderId?: string;
+  binanceTakeProfitOrderId?: string;
+  binanceStopLossOrderId?: string;
   binanceRealizedPnlUsdt?: number;
   binanceRoiPct?: number;
   binancePnlReadAt?: number;
@@ -517,6 +519,15 @@ const formatBrokerStatusLabel = (status?: Signal['executionStatus']) => {
 };
 
 const acceptedBrokerStatuses = new Set<NonNullable<Signal['executionStatus']>>(['live_accepted', 'test_accepted']);
+
+const isHiddenExecutionFailure = (rules?: string[]) => Boolean(rules?.some(rule => {
+  const lower = rule.toLowerCase();
+  return lower.includes('binance min notional')
+    || lower.includes('not tradable on binance')
+    || lower.includes('no binance')
+    || lower.includes('invalid symbol')
+    || lower.includes('symbol is not tradable');
+}));
 
 function App() {
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
@@ -2806,7 +2817,7 @@ function AutoTradePage({
             const queryMatches = !normalizedPortfolioRejectedTradeQuery
               || tradeLabel.includes(normalizedPortfolioRejectedTradeQuery)
               || String(row.id).includes(normalizedPortfolioRejectedTradeQuery.replace(/^T-?/, ''));
-          return inRange && marketMatch && sideMatch && timeframeMatch && modeMatch && scoreMatches(row, portfolioTradesScoreFilter) && queryMatches;
+          return inRange && marketMatch && sideMatch && timeframeMatch && modeMatch && !isHiddenExecutionFailure(row.failedRules) && scoreMatches(row, portfolioTradesScoreFilter) && queryMatches;
         })
         .map(row => ({
           id: row.id,
@@ -2842,7 +2853,7 @@ function AutoTradePage({
         const queryMatches = !normalizedPortfolioRejectedTradeQuery
           || tradeLabel.includes(normalizedPortfolioRejectedTradeQuery)
           || String(signal.id).includes(normalizedPortfolioRejectedTradeQuery.replace(/^T-?/, ''));
-        return inRange && rejected && marketMatch && sideMatch && timeframeMatch && modeMatch && scoreMatches(signal, portfolioTradesScoreFilter) && queryMatches;
+        return inRange && rejected && marketMatch && sideMatch && timeframeMatch && modeMatch && !isHiddenExecutionFailure(signal.executionNotes) && scoreMatches(signal, portfolioTradesScoreFilter) && queryMatches;
       })
       .map(signal => ({
         id: signal.id,
@@ -2960,11 +2971,22 @@ function AutoTradePage({
       const marketPrice = liveTicker?.price ?? row.marketPrice;
       if (!marketPrice) return row;
       const pnl = pnlFromPrice(row, marketPrice);
+      const estimatedPnlUsdt = typeof row.allocationAmount === 'number' && Number.isFinite(row.allocationAmount)
+        ? Math.abs(row.allocationAmount) * (pnl / 100)
+        : row.pnlUsdt ?? null;
+      const liveRoiPct = row.market === 'futures' && typeof row.executionLeverage === 'number'
+        ? pnl * Math.max(1, row.executionLeverage)
+        : pnl;
       return {
         ...row,
         marketPrice,
         pnl,
-        pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
+        pnlUsdt: estimatedPnlUsdt,
+        roiPct: liveRoiPct,
+        pnlSource: liveTicker ? null : row.pnlSource,
+        pnlLabel: estimatedPnlUsdt == null
+          ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
+          : `${estimatedPnlUsdt >= 0 ? '+' : ''}${estimatedPnlUsdt.toFixed(2)} USDT\n${liveRoiPct >= 0 ? '+' : ''}${liveRoiPct.toFixed(2)}%`
       };
     });
   }, [futuresTickers, livePortfolioData, tickers]);
@@ -6602,6 +6624,7 @@ type SignalTradeRow = Signal & {
   pnlReadAt?: number | null;
   allocationAmount?: number;
   allocationPct?: number;
+  venueLabel?: string;
 };
 
 function getSignalPnl(signal: Signal, marketPrice?: number) {

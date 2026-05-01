@@ -25,6 +25,8 @@ type SymbolInfo = {
   minQty?: number;
   stepSize?: number;
   quantityPrecision?: number;
+  tickSize?: number;
+  pricePrecision?: number;
 };
 
 type PriceTicker = {
@@ -86,6 +88,8 @@ type TradeSignal = SignalDraft & {
   closedAt?: number;
   closePrice?: number;
   binanceCloseOrderId?: string;
+  binanceTakeProfitOrderId?: string;
+  binanceStopLossOrderId?: string;
   binanceRealizedPnlUsdt?: number;
   binanceRoiPct?: number;
   binancePnlReadAt?: number;
@@ -1652,6 +1656,31 @@ function formatBinanceQuantity(quantity: number, rules: SymbolInfo | null) {
   };
 }
 
+function formatBinancePrice(price: number, rules: SymbolInfo | null) {
+  const tickSize = rules?.tickSize && rules.tickSize > 0 ? rules.tickSize : 0;
+  const precision = typeof rules?.pricePrecision === 'number' && Number.isFinite(rules.pricePrecision)
+    ? Math.max(0, Math.min(12, Math.floor(rules.pricePrecision)))
+    : tickSize > 0 ? decimalPlacesFromStep(tickSize) : 8;
+  const normalizedPrice = tickSize > 0
+    ? Math.round((price + Number.EPSILON) / tickSize) * tickSize
+    : price;
+  if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
+    throw new Error('Calculated Binance price is invalid.');
+  }
+  return normalizedPrice.toFixed(precision).replace(/\.?0+$/, '');
+}
+
+function isHiddenExecutionFailure(notes?: string[]) {
+  return Boolean(notes?.some(note => {
+    const lower = note.toLowerCase();
+    return lower.includes('binance min notional')
+      || lower.includes('not tradable on binance')
+      || lower.includes('no binance')
+      || lower.includes('invalid symbol')
+      || lower.includes('symbol is not tradable');
+  }));
+}
+
 function buildFuturesOrderQuantity(signal: TradeSignal, orderNotional: number) {
   const rules = getSymbolRules(signal.symbol, 'futures');
   const rawQuantity = Math.max(0, orderNotional / Math.max(signal.entry, 0.00000001));
@@ -2041,7 +2070,28 @@ async function monitorLiveFuturesProtection() {
   liveProtectionBusy = true;
   try {
     const positions = await readOpenFuturesPositions();
+    for (const signal of liveSignals) {
+      if (positions.has(positionKey(signal.symbol, signal.side))) continue;
+      if (Date.now() - signal.openedAt < 15_000) continue;
+      const marketPrice = futuresTickers.get(signal.symbol)?.price ?? signal.closePrice ?? signal.entry;
+      const hitStop = signal.side === 'LONG' ? marketPrice <= signal.stopLoss : marketPrice >= signal.stopLoss;
+      const hitTarget = signal.side === 'LONG' ? marketPrice >= signal.takeProfit : marketPrice <= signal.takeProfit;
+      const pnlPct = signalOpenPnlPct(signal, marketPrice);
+      signal.status = hitStop ? 'LOSS' : hitTarget ? 'WIN' : pnlPct >= 0 ? 'WIN' : 'LOSS';
+      signal.closedAt = Date.now();
+      signal.closePrice = marketPrice;
+      const closeOrderId = hitStop ? signal.binanceStopLossOrderId : hitTarget ? signal.binanceTakeProfitOrderId : signal.binanceCloseOrderId;
+      if (closeOrderId) applyBinanceClosedPnl(signal, await readBinanceClosedFuturesPnl(signal, closeOrderId, null));
+      signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), hitStop ? 'Binance stop-loss protection filled.' : hitTarget ? 'Binance take-profit protection filled.' : 'Binance futures position is no longer open.']));
+      invalidateComputedCaches();
+      saveState();
+      broadcast('signalClosed', signal);
+      const payload = buildSignalCloseNotificationPayload(signal, hitStop ? 'Stop Loss' : hitTarget ? 'Take Profit' : 'Futures Position Closed');
+      void notify(payload.title, payload.message, payload.level);
+      void deliverPrivateTelegramSignalClose(signal, hitStop ? 'Stop Loss' : hitTarget ? 'Take Profit' : 'Futures Position Closed');
+    }
     const active = liveSignals
+      .filter(signal => signal.status === 'OPEN')
       .map(signal => ({ signal, position: positions.get(positionKey(signal.symbol, signal.side)), metrics: getFuturesPositionMetrics(signal, positions) }))
       .filter((item): item is { signal: TradeSignal; position: BinanceFuturesPosition; metrics: NonNullable<ReturnType<typeof getFuturesPositionMetrics>> } => Boolean(item.position && item.metrics?.marketPrice));
 
@@ -2117,6 +2167,7 @@ async function monitorLiveFuturesProtection() {
 function normalizeBrokerFailureMessage(message: string) {
   const lower = message.toLowerCase();
   if (lower.includes('market is closed')) return 'Binance market is closed or this symbol is not tradable in the selected venue.';
+  if (lower.includes('invalid symbol')) return 'Binance symbol is not tradable in the selected venue.';
   if (lower.includes('margin is insufficient')) return 'Insufficient Futures Margin';
   if (lower.includes('position risk control') || lower.includes('reduce-only')) return 'Binance Symbol Risk Control';
   if (lower.includes('precision is over')) return 'Binance Quantity Precision';
@@ -2191,13 +2242,20 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
     if (rules.ruleToggles.riskPerTrade && !(orderNotional > 0)) failedRules.push('Risk Per Trade %');
   }
   if (isTestMode) {
-    const exchangeFloor = symbolRules?.minNotional ?? (signal.market === 'futures' ? 10 : 5);
+    const exchangeFloor = (symbolRules?.minNotional ?? (signal.market === 'futures' ? 10 : 5)) * 1.002;
     const quantityFloor = signal.market === 'futures'
       ? Math.max(signal.entry * Math.max(symbolRules?.minQty ?? 0.001, 0.001), exchangeFloor)
       : exchangeFloor;
     orderNotional = Math.max(orderNotional, quantityFloor);
   }
-  if (!isTestMode && symbolRules?.minNotional && orderNotional < symbolRules.minNotional) failedRules.push(`Binance Min Notional ${symbolRules.minNotional.toFixed(2)} USDT`);
+  if (!isTestMode && symbolRules?.minNotional && orderNotional < symbolRules.minNotional) {
+    const notionalFloor = symbolRules.minNotional * 1.002;
+    if (availableCapital >= notionalFloor) {
+      orderNotional = notionalFloor;
+    } else {
+      failedRules.push(`Binance Min Notional ${symbolRules.minNotional.toFixed(2)} USDT`);
+    }
+  }
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const closedToday = signals.filter(item =>
@@ -2257,6 +2315,47 @@ async function applyFuturesAccountSettings(signal: TradeSignal) {
   });
 }
 
+async function submitFuturesProtectionOrders(signal: TradeSignal) {
+  const credentials = decryptSecret();
+  if (!credentials) throw new Error('Missing Binance credentials.');
+  if (!binanceVaultState.connected) throw new Error('Binance connection is not verified.');
+  if (signal.market !== 'futures') return;
+  const rules = getSymbolRules(signal.symbol, 'futures');
+  const closeSide = signal.side === 'LONG' ? 'SELL' : 'BUY';
+  const baseParams = {
+    symbol: signal.symbol,
+    side: closeSide,
+    closePosition: 'true',
+    workingType: 'MARK_PRICE'
+  };
+  const [takeProfitResult, stopLossResult] = await Promise.allSettled([
+    signedBinanceMutableRequest<{ orderId?: number | string }>(BINANCE_FUTURES_REST, '/fapi/v1/order', credentials.apiKey, credentials.secretKey, {
+      ...baseParams,
+      type: 'TAKE_PROFIT_MARKET',
+      stopPrice: formatBinancePrice(signal.takeProfit, rules)
+    }),
+    signedBinanceMutableRequest<{ orderId?: number | string }>(BINANCE_FUTURES_REST, '/fapi/v1/order', credentials.apiKey, credentials.secretKey, {
+      ...baseParams,
+      type: 'STOP_MARKET',
+      stopPrice: formatBinancePrice(signal.stopLoss, rules)
+    })
+  ]);
+  const notes = [...(signal.executionNotes ?? [])];
+  if (takeProfitResult.status === 'fulfilled') {
+    signal.binanceTakeProfitOrderId = takeProfitResult.value.orderId != null ? String(takeProfitResult.value.orderId) : signal.binanceTakeProfitOrderId;
+    notes.push('Binance futures take-profit protection order placed.');
+  } else {
+    notes.push(`Binance take-profit protection failed: ${normalizeBrokerFailureMessage(takeProfitResult.reason instanceof Error ? takeProfitResult.reason.message : 'Unknown error')}`);
+  }
+  if (stopLossResult.status === 'fulfilled') {
+    signal.binanceStopLossOrderId = stopLossResult.value.orderId != null ? String(stopLossResult.value.orderId) : signal.binanceStopLossOrderId;
+    notes.push('Binance futures stop-loss protection order placed.');
+  } else {
+    notes.push(`Binance stop-loss protection failed: ${normalizeBrokerFailureMessage(stopLossResult.reason instanceof Error ? stopLossResult.reason.message : 'Unknown error')}`);
+  }
+  signal.executionNotes = Array.from(new Set(notes));
+}
+
 async function submitBinanceLiveOrder(signal: TradeSignal, orderNotional: number) {
   const credentials = decryptSecret();
   if (!credentials) throw new Error('Missing Binance credentials.');
@@ -2278,6 +2377,7 @@ async function submitBinanceLiveOrder(signal: TradeSignal, orderNotional: number
     type: 'MARKET',
     quantity: buildFuturesOrderQuantity(signal, orderNotional)
   });
+  await submitFuturesProtectionOrders(signal);
 }
 
 async function applyExecutionPipeline(signal: TradeSignal) {
@@ -2290,7 +2390,7 @@ async function applyExecutionPipeline(signal: TradeSignal) {
   if (!binanceVaultState.connected) {
     signal.executionStatus = 'pending';
     signal.executionNotes = ['Public signal generated. Binance portfolio execution is idle until an admin account is connected.'];
-    return;
+    return true;
   }
   let result: Awaited<ReturnType<typeof evaluateExecutionCandidate>>;
   try {
@@ -2298,29 +2398,31 @@ async function applyExecutionPipeline(signal: TradeSignal) {
   } catch (error) {
     signal.executionStatus = liveExecutionRules.executionMode === 'live' ? 'live_failed' : 'test_failed';
     signal.executionNotes = [error instanceof Error ? error.message : 'Execution candidate evaluation failed.'];
-    return;
+    return !isHiddenExecutionFailure(signal.executionNotes);
   }
   if (result.failedRules.length > 0) {
     signal.executionStatus = 'rejected';
     signal.executionNotes = result.failedRules;
-    return;
+    return !isHiddenExecutionFailure(signal.executionNotes);
   }
   signal.executionStatus = 'pending';
   try {
     if (liveExecutionRules.executionMode === 'live') {
       await submitBinanceLiveOrder(signal, result.orderNotional);
       signal.executionStatus = 'live_accepted';
-      signal.executionNotes = [`Binance LIVE order accepted in ${signal.market.toUpperCase()} mode.`];
-      return;
+      signal.executionNotes = Array.from(new Set([`Binance LIVE order accepted in ${signal.market.toUpperCase()} mode.`, ...(signal.executionNotes ?? [])]));
+      return true;
     }
     await submitBinanceTestOrder(signal, result.orderNotional);
     signal.executionStatus = 'test_accepted';
     signal.executionNotes = [`Binance test order accepted in ${signal.market.toUpperCase()} mode.`];
+    return true;
   } catch (error) {
     signal.executionStatus = liveExecutionRules.executionMode === 'live' ? 'live_failed' : 'test_failed';
     const rawMessage = error instanceof Error ? error.message : liveExecutionRules.executionMode === 'live' ? 'Binance live order failed.' : 'Binance test order failed.';
     rememberBrokerRiskControl(signal.symbol, rawMessage);
     signal.executionNotes = [normalizeBrokerFailureMessage(rawMessage)];
+    return !isHiddenExecutionFailure(signal.executionNotes);
   }
 }
 
@@ -4178,7 +4280,8 @@ async function loadSymbols() {
       quoteOrderQtyMarketAllowed?: boolean;
       orderTypes?: string[];
       quantityPrecision?: number;
-      filters?: { filterType?: string; minNotional?: string; notional?: string; minQty?: string; stepSize?: string }[];
+      pricePrecision?: number;
+      filters?: { filterType?: string; minNotional?: string; notional?: string; minQty?: string; stepSize?: string; tickSize?: string }[];
     })[];
   };
   symbols = data.symbols
@@ -4192,6 +4295,7 @@ async function loadSymbols() {
     .map(symbol => {
       const notionalFilter = symbol.filters?.find(filter => filter.filterType === 'NOTIONAL' || filter.filterType === 'MIN_NOTIONAL');
       const lotSizeFilter = symbol.filters?.find(filter => filter.filterType === 'LOT_SIZE');
+      const priceFilter = symbol.filters?.find(filter => filter.filterType === 'PRICE_FILTER');
       return {
         symbol: symbol.symbol,
         baseAsset: symbol.baseAsset,
@@ -4200,7 +4304,9 @@ async function loadSymbols() {
         minNotional: Number(notionalFilter?.minNotional ?? notionalFilter?.notional ?? 0) || undefined,
         minQty: Number(lotSizeFilter?.minQty ?? 0) || undefined,
         stepSize: Number(lotSizeFilter?.stepSize ?? 0) || undefined,
-        quantityPrecision: Number.isFinite(symbol.quantityPrecision) ? symbol.quantityPrecision : undefined
+        quantityPrecision: Number.isFinite(symbol.quantityPrecision) ? symbol.quantityPrecision : undefined,
+        tickSize: Number(priceFilter?.tickSize ?? 0) || undefined,
+        pricePrecision: Number.isFinite(symbol.pricePrecision) ? symbol.pricePrecision : undefined
       };
     });
   scannerUniverse = symbols.map(s => s.symbol);
@@ -4214,7 +4320,8 @@ async function loadFuturesSymbols() {
       contractType?: string;
       orderTypes?: string[];
       quantityPrecision?: number;
-      filters?: { filterType?: string; minNotional?: string; notional?: string; minQty?: string; stepSize?: string }[];
+      pricePrecision?: number;
+      filters?: { filterType?: string; minNotional?: string; notional?: string; minQty?: string; stepSize?: string; tickSize?: string }[];
     })[];
   };
   futuresSymbols = data.symbols
@@ -4228,6 +4335,7 @@ async function loadFuturesSymbols() {
       const notionalFilter = symbol.filters?.find(filter => filter.filterType === 'NOTIONAL' || filter.filterType === 'MIN_NOTIONAL');
       const lotSizeFilter = symbol.filters?.find(filter => filter.filterType === 'MARKET_LOT_SIZE')
         ?? symbol.filters?.find(filter => filter.filterType === 'LOT_SIZE');
+      const priceFilter = symbol.filters?.find(filter => filter.filterType === 'PRICE_FILTER');
       return {
         symbol: symbol.symbol,
         baseAsset: symbol.baseAsset,
@@ -4237,7 +4345,9 @@ async function loadFuturesSymbols() {
         minNotional: Number(notionalFilter?.minNotional ?? notionalFilter?.notional ?? 0) || undefined,
         minQty: Number(lotSizeFilter?.minQty ?? 0) || undefined,
         stepSize: Number(lotSizeFilter?.stepSize ?? 0) || undefined,
-        quantityPrecision: Number.isFinite(symbol.quantityPrecision) ? symbol.quantityPrecision : undefined
+        quantityPrecision: Number.isFinite(symbol.quantityPrecision) ? symbol.quantityPrecision : undefined,
+        tickSize: Number(priceFilter?.tickSize ?? 0) || undefined,
+        pricePrecision: Number.isFinite(symbol.pricePrecision) ? symbol.pricePrecision : undefined
       };
     });
 }
@@ -4722,7 +4832,8 @@ async function scanMarket() {
           if (hasOpenSameDirectionSignal(candidate.signal.symbol, candidate.market, candidate.signal.side)) continue;
           if (hasExcessDirectionalExposure(candidate)) continue;
           candidate.signal.reason = `${candidate.signal.reason} | Score ${candidate.score.toFixed(1)} | Momentum ${(candidate.components.momentum * 100).toFixed(0)} | Volume ${(candidate.components.volume * 100).toFixed(0)} | Alignment ${(candidate.components.alignment * 100).toFixed(0)} | RR ${(candidate.components.riskReward * 100).toFixed(0)}`;
-          await applyExecutionPipeline(candidate.signal);
+          const shouldPublishSignal = await applyExecutionPipeline(candidate.signal);
+          if (!shouldPublishSignal) continue;
           signals.unshift(candidate.signal);
           invalidateComputedCaches();
           saveState();
@@ -5228,6 +5339,7 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
     const acceptedBase = acceptedAnalyticsBase.filter(signal => acceptedKindMatches(signal));
     const rejectedBase = generatedBase.filter(signal =>
       !acceptedStatuses.has(signal.executionStatus ?? 'pending')
+      && !isHiddenExecutionFailure(signal.executionNotes)
       && scoreMatchesFilter(signal, scoreFilter)
       && rejectedKindMatches(signal)
     );
@@ -5394,6 +5506,8 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
         strategyName: signal.strategyName,
         status,
         executionStatus: signal.executionStatus ?? 'pending',
+        executionLeverage: signal.executionLeverage ?? null,
+        executionMarginMode: signal.executionMarginMode ?? null,
         side: signal.side,
         market: signal.market,
         venueLabel: signal.market === 'futures' ? `Futures x${Math.max(1, signal.executionLeverage ?? liveExecutionRules.futuresLeverage)}` : 'Spot',
@@ -5440,6 +5554,7 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
     const acceptedRows = acceptedFiltered.map(mapRow).sort((a, b) => b.openedAt - a.openedAt);
     const rejectedFiltered = generatedBase.filter(signal =>
       !acceptedStatuses.has(signal.executionStatus ?? 'pending')
+      && !isHiddenExecutionFailure(signal.executionNotes)
       && scoreMatchesFilter(signal, scoreFilter)
       && rejectedKindMatches(signal)
       && rejectedQueryMatches(signal)
