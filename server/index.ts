@@ -4792,6 +4792,41 @@ function closeLedgerSignal(signal: TradeSignal, status: TradeSignal['status'], c
   void deliverPrivateTelegramSignalClose(signal, closeText);
 }
 
+function closeInactiveMarketSignals() {
+  const closedSignals: TradeSignal[] = [];
+  for (const signal of signals) {
+    if (signal.status !== 'OPEN') continue;
+    const venueSymbolsLoaded = signal.market === 'futures' ? futuresSymbols.length > 0 : symbols.length > 0;
+    if (!venueSymbolsLoaded) continue;
+    const rules = getSymbolRules(signal.symbol, signal.market);
+    if (rules) continue;
+    const ticker = signal.market === 'futures'
+      ? futuresTickers.get(signal.symbol)
+      : tickers.get(signal.symbol);
+    const closePrice = Number.isFinite(ticker?.price) && (ticker?.price ?? 0) > 0
+      ? ticker!.price
+      : signal.entry;
+    const pnl = signalOpenPnlPct(signal, closePrice);
+    signal.status = pnl < 0 ? 'LOSS' : 'WIN';
+    signal.closedAt = Date.now();
+    signal.closePrice = closePrice;
+    signal.executionNotes = Array.from(new Set([
+      ...(signal.executionNotes ?? []),
+      `Closed because Binance no longer lists ${signal.symbol} as TRADING for ${signal.market}.`
+    ]));
+    symbolPauseUntil.set(signal.symbol, Date.now() + 6 * 60 * 60_000);
+    closedSignals.push(signal);
+  }
+  if (closedSignals.length === 0) return;
+  invalidateComputedCaches();
+  saveState();
+  for (const signal of closedSignals) {
+    broadcast('signalClosed', signal);
+  }
+  broadcast('dashboard', getDashboardPayload());
+  console.log(`[ledger] closed ${closedSignals.length} inactive-market open signals`);
+}
+
 function ledgerNetPnl() {
   return signals.reduce((sum, signal) => sum + signalNetPnl(signal), 0);
 }
@@ -5778,10 +5813,12 @@ async function initializeRuntime() {
   connectBinanceFutures();
   await runStartupStep('spot ticker poll', pollTickersFallback);
   await runStartupStep('futures ticker poll', pollFuturesTickersFallback);
+  await runStartupStep('inactive open signal cleanup', async () => closeInactiveMarketSignals());
   await runStartupStep('market scan', scanMarket);
   setInterval(pollTickersFallback, 5000);
   setInterval(pollFuturesTickersFallback, 5000);
   setInterval(monitorLiveFuturesProtection, 5000);
+  setInterval(closeInactiveMarketSignals, 60_000);
   setInterval(scanMarket, 60_000);
   setInterval(syncTelegramSubscribersFromBot, 15000);
   setInterval(() => broadcast('dashboard', getDashboardPayload()), 5000);
