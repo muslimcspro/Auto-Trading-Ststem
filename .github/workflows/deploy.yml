@@ -79,11 +79,16 @@ jobs:
           set -euo pipefail
           PORT="${VPS_PORT:-22}"
           ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+          TEMP_ADMIN_PASSWORD_GENERATED=0
+          if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
+            ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
+            TEMP_ADMIN_PASSWORD_GENERATED=1
+          fi
           ADMIN_PASSWORD_B64="$(printf '%s' "${ADMIN_PASSWORD:-}" | base64 -w0)"
           ADMIN_USERNAME_B64="$(printf '%s' "$ADMIN_USERNAME" | base64 -w0)"
           SECRETS_MASTER_KEY_B64="$(printf '%s' "${SECRETS_MASTER_KEY:-}" | base64 -w0)"
           ssh -p "$PORT" -i ~/.ssh/trading71_vps "$VPS_USER@$VPS_HOST" \
-            "ADMIN_PASSWORD_B64='$ADMIN_PASSWORD_B64' ADMIN_USERNAME_B64='$ADMIN_USERNAME_B64' RESET_ADMIN_PASSWORD='$RESET_ADMIN_PASSWORD' SECRETS_MASTER_KEY_B64='$SECRETS_MASTER_KEY_B64' bash -s" <<'EOF'
+            "ADMIN_PASSWORD_B64='$ADMIN_PASSWORD_B64' ADMIN_USERNAME_B64='$ADMIN_USERNAME_B64' SECRETS_MASTER_KEY_B64='$SECRETS_MASTER_KEY_B64' bash -s" <<'EOF'
           set -euo pipefail
           cd /opt/trading71
           git pull --ff-only
@@ -91,14 +96,9 @@ jobs:
           ADMIN_USERNAME="$(printf '%s' "$ADMIN_USERNAME_B64" | base64 -d)"
           touch .env
           CURRENT_ADMIN_PASSWORD="$(grep -m1 '^ADMIN_PASSWORD=' .env | cut -d= -f2- || true)"
-          TEMP_ADMIN_PASSWORD_GENERATED=0
-          if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
-            ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
-            TEMP_ADMIN_PASSWORD_GENERATED=1
-          elif [ -z "$ADMIN_PASSWORD" ]; then
+          if [ -z "$ADMIN_PASSWORD" ]; then
             if [ -z "$CURRENT_ADMIN_PASSWORD" ]; then
               ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
-              TEMP_ADMIN_PASSWORD_GENERATED=1
             else
               ADMIN_PASSWORD="$CURRENT_ADMIN_PASSWORD"
             fi
@@ -116,11 +116,17 @@ jobs:
             printf 'SECRETS_MASTER_KEY=%s\n' "$SECRETS_MASTER_KEY" >> "$tmp_env"
           fi
           mv "$tmp_env" .env
-          if [ "$TEMP_ADMIN_PASSWORD_GENERATED" = "1" ]; then
-            echo "::warning title=Temporary admin password generated::Use this password once, then change it inside the app."
-            echo "::notice title=Temporary admin username::$ADMIN_USERNAME"
-            echo "::notice title=Temporary admin password::$ADMIN_PASSWORD"
-          fi
           docker compose -f docker-compose.oracle.yml up -d --build
           docker compose -f docker-compose.oracle.yml ps
           EOF
+          if [ "$TEMP_ADMIN_PASSWORD_GENERATED" = "1" ]; then
+            {
+              echo "## Temporary admin login"
+              echo ""
+              echo "Username: \`$ADMIN_USERNAME\`"
+              echo ""
+              echo "Password: \`$ADMIN_PASSWORD\`"
+              echo ""
+              echo "Use it once, then change it inside the app."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
