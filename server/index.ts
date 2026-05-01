@@ -2115,6 +2115,7 @@ async function monitorLiveFuturesProtection() {
 
 function normalizeBrokerFailureMessage(message: string) {
   const lower = message.toLowerCase();
+  if (lower.includes('market is closed')) return 'Binance market is closed or this symbol is not tradable in the selected venue.';
   if (lower.includes('margin is insufficient')) return 'Insufficient Futures Margin';
   if (lower.includes('position risk control') || lower.includes('reduce-only')) return 'Binance Symbol Risk Control';
   if (lower.includes('precision is over')) return 'Binance Quantity Precision';

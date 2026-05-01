@@ -2310,7 +2310,7 @@ function AutoTradePage({
   const saveLiveRulesSettings = async () => {
     try {
       const resolvedMaxTrades = openTradeLimitUnlimited ? 999 : Math.max(1, Number(customOpenTradeLimit) || 6);
-      const resolvedDailyLoss = Math.max(0, dailyLossUsesCustom ? (Number(customDailyLossLimit) || 3) : 3);
+      const resolvedDailyLoss = Math.max(0, dailyLossUsesCustom ? (Number(customDailyLossLimit) || 0) : 3);
       const effectiveRuleToggles: LiveRulesPayload['ruleToggles'] = {
         tradingVenue: true,
         allowedDirection: venueMode !== 'spot',
@@ -4308,7 +4308,7 @@ function AutoTradePage({
                     onChange={event => {
                       const next = event.target.value.replace(/[^\d.]/g, '');
                       setCustomDailyLossLimit(next);
-                      setDailyLoss(next || '3');
+                      setDailyLoss(next);
                     }}
                   />
                 </label>}
