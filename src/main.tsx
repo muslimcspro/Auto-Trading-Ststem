@@ -2383,7 +2383,7 @@ function AutoTradePage({
       range: portfolioTradesRange,
       status: portfolioTradesStatusFilter,
       side: portfolioTradesSideFilter,
-      market: venueMode === 'both' ? 'all' : venueMode,
+      market: portfolioTradesMarketFilter,
       timeframe: portfolioTradesTimeframeFilter,
       mode: portfolioTradesExecutionProfileFilter,
       score: portfolioTradesScoreFilter,
