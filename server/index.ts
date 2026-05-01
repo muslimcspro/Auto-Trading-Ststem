@@ -5188,16 +5188,19 @@ async function pollTickersFallback() {
   const response = await fetch(`${BINANCE_REST}/api/v3/ticker/24hr`).catch(() => null);
   if (!response?.ok) return;
   const rows = await response.json() as { symbol: string; lastPrice: string; priceChangePercent: string; quoteVolume: string; closeTime: number }[];
+  const updates: PriceTicker[] = [];
   for (const row of rows) {
-    tickers.set(row.symbol, {
+    const ticker = {
       symbol: row.symbol,
       price: Number(row.lastPrice),
       change24h: Number(row.priceChangePercent),
       quoteVolume: Number(row.quoteVolume),
       eventTime: row.closeTime
-    });
+    };
+    tickers.set(row.symbol, ticker);
+    updates.push(ticker);
   }
-  broadcast('prices', buildPricesBroadcastPayload());
+  broadcast('prices', { ...buildPricesBroadcastPayload(), spotUpdates: updates });
   updateOpenSignals();
 }
 
@@ -5205,16 +5208,19 @@ async function pollFuturesTickersFallback() {
   const response = await fetch(`${BINANCE_FUTURES_REST}/fapi/v1/ticker/24hr`).catch(() => null);
   if (!response?.ok) return;
   const rows = await response.json() as { symbol: string; lastPrice: string; priceChangePercent: string; quoteVolume: string; closeTime: number }[];
+  const updates: PriceTicker[] = [];
   for (const row of rows) {
-    futuresTickers.set(row.symbol, {
+    const ticker = {
       symbol: row.symbol,
       price: Number(row.lastPrice),
       change24h: Number(row.priceChangePercent),
       quoteVolume: Number(row.quoteVolume),
       eventTime: row.closeTime
-    });
+    };
+    futuresTickers.set(row.symbol, ticker);
+    updates.push(ticker);
   }
-  broadcast('prices', buildPricesBroadcastPayload());
+  broadcast('prices', { ...buildPricesBroadcastPayload(), futuresUpdates: updates });
   updateOpenSignals();
 }
 
