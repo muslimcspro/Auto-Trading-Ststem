@@ -633,6 +633,20 @@ function App() {
         socket.onmessage = event => {
           const { type, payload } = JSON.parse(event.data);
           if (type === 'prices') {
+            if (Array.isArray(payload.spotUpdates)) {
+              setTickers(prev => {
+                const next = new Map(prev);
+                for (const ticker of payload.spotUpdates as Ticker[]) next.set(ticker.symbol, ticker);
+                return next;
+              });
+            }
+            if (Array.isArray(payload.futuresUpdates)) {
+              setFuturesTickers(prev => {
+                const next = new Map(prev);
+                for (const ticker of payload.futuresUpdates as Ticker[]) next.set(ticker.symbol, ticker);
+                return next;
+              });
+            }
             setSpotTop(payload.spotTop ?? []);
             setFuturesTop(payload.futuresTop ?? []);
             setSpotGainers(payload.spotGainers ?? []);
@@ -2979,8 +2993,26 @@ function AutoTradePage({
   const activeUserRecord = sessionUser?.role === 'user'
     ? toAccessRequest(sessionUser)
     : accessRequests.find(request => request.status === 'approved' && request.name === memberName);
-  const effectivePortfolioBestTrade = autoMode === 'live' ? (livePortfolioData?.summary.bestTrade ?? null) : portfolioLedgerBestTrade;
-  const effectivePortfolioWorstTrade = autoMode === 'live' ? (livePortfolioData?.summary.worstTrade ?? null) : portfolioLedgerWorstTrade;
+  const livePortfolioRows = useMemo(() => {
+    if (!livePortfolioData) return [];
+    return livePortfolioData.accepted.rows.map(row => {
+      if (row.status !== 'OPEN') return row;
+      const liveTicker = row.market === 'futures' ? futuresTickers.get(row.symbol) : tickers.get(row.symbol);
+      const marketPrice = liveTicker?.price ?? row.marketPrice;
+      if (!marketPrice) return row;
+      const pnl = pnlFromPrice(row, marketPrice);
+      return {
+        ...row,
+        marketPrice,
+        pnl,
+        pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
+      };
+    });
+  }, [futuresTickers, livePortfolioData, tickers]);
+  const livePortfolioBestTrade = useMemo(() => livePortfolioRows.reduce<SignalTradeRow | null>((best, row) => !best || row.pnl > best.pnl ? row : best, null), [livePortfolioRows]);
+  const livePortfolioWorstTrade = useMemo(() => livePortfolioRows.reduce<SignalTradeRow | null>((worst, row) => !worst || row.pnl < worst.pnl ? row : worst, null), [livePortfolioRows]);
+  const effectivePortfolioBestTrade = autoMode === 'live' ? livePortfolioBestTrade : portfolioLedgerBestTrade;
+  const effectivePortfolioWorstTrade = autoMode === 'live' ? livePortfolioWorstTrade : portfolioLedgerWorstTrade;
   const effectivePortfolioStats = autoMode === 'live' && livePortfolioSummary
       ? {
       winCount: livePortfolioSummary.filterCounts.win,
@@ -2992,17 +3024,16 @@ function AutoTradePage({
       futuresCount: livePortfolioSummary.summary.futuresCount
     }
     : portfolioLedgerStats;
-  const effectivePortfolioPnlCards = autoMode === 'live' && livePortfolioSummary
-    ? {
-      openPnl: livePortfolioSummary.summary.openPnl,
-      closedPnl: livePortfolioSummary.summary.closedPnl,
-      netPnl: livePortfolioSummary.summary.netPnl
-    }
-    : portfolioLedgerPnlCards;
+  const effectivePortfolioPnlCards = useMemo(() => {
+    if (autoMode !== 'live' || !livePortfolioData) return portfolioLedgerPnlCards;
+    const openPnl = livePortfolioRows.filter(row => row.status === 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
+    const closedPnl = livePortfolioRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
+    return { openPnl, closedPnl, netPnl: openPnl + closedPnl };
+  }, [autoMode, livePortfolioData, livePortfolioRows, portfolioLedgerPnlCards]);
   const effectivePortfolioFilterCounts = autoMode === 'live' && livePortfolioSummary
     ? livePortfolioSummary.filterCounts
     : portfolioLedgerFilterCounts;
-  const effectivePortfolioLedgerRows = autoMode === 'live' && livePortfolioData ? livePortfolioData.accepted.rows : portfolioLedgerRows;
+  const effectivePortfolioLedgerRows = autoMode === 'live' && livePortfolioData ? livePortfolioRows : portfolioLedgerRows;
   const effectivePrivateRejectedRows = autoMode === 'live' && livePortfolioData ? livePortfolioData.rejected.rows : privateRejectedRows;
   const effectiveStartingCapital = autoMode === 'live' && livePortfolioSummary ? livePortfolioSummary.summary.startingBalance : activeStartingCapital;
   const effectiveCurrentCapital = autoMode === 'live' && livePortfolioSummary ? livePortfolioSummary.summary.currentCapital : activePortfolioCurrentCapital;

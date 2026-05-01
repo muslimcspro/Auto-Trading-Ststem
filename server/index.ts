@@ -5001,10 +5001,13 @@ function connectBinance() {
   ws = new WebSocket(BINANCE_WS);
   ws.on('message', raw => {
     const rows = JSON.parse(raw.toString()) as { s: string; c: string; P: string; q: string; E: number }[];
+    const updates: PriceTicker[] = [];
     for (const row of rows) {
-      tickers.set(row.s, { symbol: row.s, price: Number(row.c), change24h: Number(row.P), quoteVolume: Number(row.q), eventTime: row.E });
+      const ticker = { symbol: row.s, price: Number(row.c), change24h: Number(row.P), quoteVolume: Number(row.q), eventTime: row.E };
+      tickers.set(row.s, ticker);
+      updates.push(ticker);
     }
-    broadcast('prices', buildPricesBroadcastPayload());
+    broadcast('prices', { ...buildPricesBroadcastPayload(), spotUpdates: updates });
     updateOpenSignals();
   });
   ws.on('close', () => setTimeout(connectBinance, 3000));
@@ -5016,16 +5019,19 @@ function connectBinanceFutures() {
   futuresWs = new WebSocket(BINANCE_FUTURES_WS);
   futuresWs.on('message', raw => {
     const rows = JSON.parse(raw.toString()) as { s: string; c: string; P: string; q: string; E: number }[];
+    const updates: PriceTicker[] = [];
     for (const row of rows) {
-      futuresTickers.set(row.s, {
+      const ticker = {
         symbol: row.s,
         price: Number(row.c),
         change24h: Number(row.P),
         quoteVolume: Number(row.q),
         eventTime: row.E
-      });
+      };
+      futuresTickers.set(row.s, ticker);
+      updates.push(ticker);
     }
-    broadcast('prices', buildPricesBroadcastPayload());
+    broadcast('prices', { ...buildPricesBroadcastPayload(), futuresUpdates: updates });
     updateOpenSignals();
   });
   futuresWs.on('close', () => setTimeout(connectBinanceFutures, 3000));
