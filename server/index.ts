@@ -90,6 +90,8 @@ type TradeSignal = SignalDraft & {
   profitProtectionArmedAt?: number;
   trailingStop?: number;
   extremePrice?: number;
+  maxFavorablePnlPct?: number;
+  profitLockPct?: number;
 };
 
 type SignalCandidate = {
@@ -2604,6 +2606,16 @@ function loadState() {
         : 'test_accepted';
       repairedState = true;
     }
+    if (signal.status === 'OPEN') {
+      if (typeof signal.maxFavorablePnlPct !== 'number') {
+        signal.maxFavorablePnlPct = Math.max(0, openSignalPnl(signal));
+        repairedState = true;
+      }
+      if (typeof signal.profitLockPct !== 'number') {
+        signal.profitLockPct = profitLockFromPeak(signal);
+        repairedState = true;
+      }
+    }
   }
   for (const notification of notifications) {
     const legacyId = notification.title.match(/#(\d+)/)?.[1];
@@ -2645,19 +2657,33 @@ const percent = (from: number, to: number, side: Side) =>
   side === 'LONG' ? ((to - from) / from) * 100 : ((from - to) / from) * 100;
 
 const QUALITY_GATE = {
-  minScore: 60,
-  minRewardMultiple: 2,
-  minConfidence: 68,
-  minAlignment: 0.6
+  minScore: 74,
+  minRewardMultiple: 2.5,
+  minConfidence: 72,
+  minAlignment: 0.72,
+  minVolume: 0.45,
+  minAdx: 20,
+  maxSameDirectionOpen: 8,
+  maxSameMarketDirectionOpen: 5,
+  maxSameBaseAssetOpen: 3,
+  maxCorrelatedOpen: 3,
+  maxCorrelation: 0.62,
+  profitArmR: 1,
+  profitGivebackRatio: 0.45
 };
 
 const STRATEGY_PAUSE_RULE = {
-  minClosedTrades: 30,
-  minWinRate: 45,
-  maxNetLossPct: -10
+  minClosedTrades: 10,
+  minWinRate: 52,
+  maxNetLossPct: -5,
+  lossStreak: 2,
+  cooldownMs: 4 * 60 * 60_000
 };
 
 let spotLongMarketGateCache: { checkedAt: number; allowed: boolean } | null = null;
+const directionalMarketGateCache = new Map<string, { checkedAt: number; allowed: boolean }>();
+const strategyPauseUntil = new Map<string, number>();
+const symbolPauseUntil = new Map<string, number>();
 
 function getRangeStartForKey(range: string, customFrom?: string) {
   const now = Date.now();
@@ -2721,6 +2747,28 @@ const atr = (candles: Candle[], period = 14) => {
     return Math.max(c.high - c.low, Math.abs(c.high - previous.close), Math.abs(c.low - previous.close));
   });
   return trs.reduce((a, b) => a + b, 0) / trs.length;
+};
+
+const adx = (candles: Candle[], period = 14) => {
+  if (candles.length <= period + 1) return 0;
+  const scoped = candles.slice(-(period + 1));
+  let plusDmSum = 0;
+  let minusDmSum = 0;
+  let trSum = 0;
+  for (let index = 1; index < scoped.length; index += 1) {
+    const current = scoped[index]!;
+    const previous = scoped[index - 1]!;
+    const upMove = current.high - previous.high;
+    const downMove = previous.low - current.low;
+    plusDmSum += upMove > downMove && upMove > 0 ? upMove : 0;
+    minusDmSum += downMove > upMove && downMove > 0 ? downMove : 0;
+    trSum += Math.max(current.high - current.low, Math.abs(current.high - previous.close), Math.abs(current.low - previous.close));
+  }
+  if (trSum <= 0) return 0;
+  const plusDi = (plusDmSum / trSum) * 100;
+  const minusDi = (minusDmSum / trSum) * 100;
+  const sum = plusDi + minusDi;
+  return sum > 0 ? (Math.abs(plusDi - minusDi) / sum) * 100 : 0;
 };
 
 function recentSwingHigh(candles: Candle[], lookback: number) {
@@ -4082,7 +4130,9 @@ function buildSignal(strategy: Strategy, draft: SignalDraft, ticker: PriceTicker
     riskPct: Math.abs(percent(entry, stopLoss, draft.side)),
     openedAt: Date.now(),
     plannedExitAt: Date.now() + durationMinutes * 60_000,
-    status: 'OPEN'
+    status: 'OPEN',
+    maxFavorablePnlPct: 0,
+    profitLockPct: 0
   };
 }
 
@@ -4194,8 +4244,38 @@ function hasOpenSameDirectionSignal(symbol: string, market: TradingVenue, side: 
     && signal.market === market
     && signal.side === side
     && signal.status === 'OPEN'
-    && countsAsOpenExecution(signal.executionStatus)
   );
+}
+
+function openLedgerSignals(market?: TradingVenue) {
+  return signals.filter(signal => signal.status === 'OPEN' && (!market || signal.market === market));
+}
+
+function baseAssetFromSymbol(symbol: string) {
+  return symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol;
+}
+
+function hasExcessDirectionalExposure(candidate: SignalCandidate) {
+  const open = openLedgerSignals(candidate.market);
+  const sameSide = open.filter(signal => signal.side === candidate.signal.side);
+  const sameSymbol = open.filter(signal => signal.symbol === candidate.signal.symbol);
+  const sameBase = open.filter(signal => baseAssetFromSymbol(signal.symbol) === baseAssetFromSymbol(candidate.signal.symbol));
+  const sameMarketSide = sameSide.filter(signal => signal.market === candidate.market);
+  return sameSide.length >= QUALITY_GATE.maxSameDirectionOpen
+    || sameMarketSide.length >= QUALITY_GATE.maxSameMarketDirectionOpen
+    || sameSymbol.length > 0
+    || sameBase.length >= QUALITY_GATE.maxSameBaseAssetOpen;
+}
+
+function hasExcessCorrelation(candidate: SignalCandidate, selected: SignalCandidate[]) {
+  const peers = selected.filter(item => item.market === candidate.market && item.signal.side === candidate.signal.side);
+  let correlated = 0;
+  for (const peer of peers) {
+    if (peer.signal.symbol === candidate.signal.symbol) continue;
+    const value = correlation(normalizeReturns(candidate.candles), normalizeReturns(peer.candles));
+    if (value >= QUALITY_GATE.maxCorrelation) correlated += 1;
+  }
+  return correlated >= QUALITY_GATE.maxCorrelatedOpen;
 }
 
 function closedSignalPnl(signal: TradeSignal) {
@@ -4237,6 +4317,8 @@ function lookup24hNetPnlLabel(idLabel: string) {
 }
 
 function isStrategyTemporarilyPaused(strategyId: string) {
+  const pauseUntil = strategyPauseUntil.get(strategyId);
+  if (pauseUntil && pauseUntil > Date.now()) return true;
   const closed = signals
     .filter(signal => signal.strategyId === strategyId && signal.status !== 'OPEN')
     .slice(0, STRATEGY_PAUSE_RULE.minClosedTrades);
@@ -4244,17 +4326,36 @@ function isStrategyTemporarilyPaused(strategyId: string) {
   const wins = closed.filter(signal => signal.status === 'WIN').length;
   const winRate = (wins / closed.length) * 100;
   const netPnl = closed.reduce((sum, signal) => sum + closedSignalPnl(signal), 0);
-  return winRate < STRATEGY_PAUSE_RULE.minWinRate || netPnl <= STRATEGY_PAUSE_RULE.maxNetLossPct;
+  const lossStreak = closed.slice(0, STRATEGY_PAUSE_RULE.lossStreak).every(signal => signal.status === 'LOSS');
+  const shouldPause = lossStreak || winRate < STRATEGY_PAUSE_RULE.minWinRate || netPnl <= STRATEGY_PAUSE_RULE.maxNetLossPct;
+  if (shouldPause) strategyPauseUntil.set(strategyId, Date.now() + STRATEGY_PAUSE_RULE.cooldownMs);
+  return shouldPause;
 }
 
 function passesQualityGate(candidate: SignalCandidate) {
   const rewardMultiple = candidate.signal.riskPct > 0
     ? candidate.signal.expectedProfitPct / candidate.signal.riskPct
     : Infinity;
-  return candidate.score >= QUALITY_GATE.minScore
+  const strategyScoreFloor = ({
+    'momentum-scalp': 78,
+    'rsi-reversion': 80,
+    'bear-trend-short': 74,
+    'pullback-21': 70,
+    'volume-breakout': 72,
+    'micro-squeeze': 78,
+    'atr-expansion': 76,
+    'liquidity-sweep': 74,
+    'vwap-proxy': 74,
+    'range-flip': 72,
+    'macd-proxy': 74,
+    'ema-trend-rider': 72
+  } as Record<string, number>)[candidate.signal.strategyId] ?? QUALITY_GATE.minScore;
+  return candidate.score >= Math.max(QUALITY_GATE.minScore, strategyScoreFloor)
     && rewardMultiple >= QUALITY_GATE.minRewardMultiple
     && candidate.signal.confidence >= QUALITY_GATE.minConfidence
-    && candidate.components.alignment >= QUALITY_GATE.minAlignment;
+    && candidate.components.alignment >= QUALITY_GATE.minAlignment
+    && candidate.components.volume >= QUALITY_GATE.minVolume
+    && adx(candidate.candles) >= QUALITY_GATE.minAdx;
 }
 
 function isMacroUptrend(candles: Candle[]) {
@@ -4264,6 +4365,32 @@ function isMacroUptrend(candles: Candle[]) {
   const ema21 = ema(closes, 21);
   const ema50 = ema(closes, 50);
   return lastClose > ema21 && ema21 > ema50;
+}
+
+function isMacroDowntrend(candles: Candle[]) {
+  if (candles.length < 50) return false;
+  const closes = candles.map(candle => candle.close);
+  const lastClose = closes.at(-1) ?? 0;
+  const ema21 = ema(closes, 21);
+  const ema50 = ema(closes, 50);
+  return lastClose < ema21 && ema21 < ema50;
+}
+
+async function isDirectionalMarketSupportive(side: Side, market: TradingVenue) {
+  const key = `${market}:${side}`;
+  const cached = directionalMarketGateCache.get(key);
+  if (cached && Date.now() - cached.checkedAt < 5 * 60_000) return cached.allowed;
+  const [btc1h, btc4h, eth1h, eth4h] = await Promise.all([
+    fetchCandles('BTCUSDT', '1h', market, 80).catch(() => []),
+    fetchCandles('BTCUSDT', '4h', market, 80).catch(() => []),
+    fetchCandles('ETHUSDT', '1h', market, 80).catch(() => []),
+    fetchCandles('ETHUSDT', '4h', market, 80).catch(() => [])
+  ]);
+  const btcOk = side === 'LONG' ? isMacroUptrend(btc1h) && isMacroUptrend(btc4h) : isMacroDowntrend(btc1h) && isMacroDowntrend(btc4h);
+  const ethOk = side === 'LONG' ? isMacroUptrend(eth1h) && isMacroUptrend(eth4h) : isMacroDowntrend(eth1h) && isMacroDowntrend(eth4h);
+  const allowed = btcOk || ethOk;
+  directionalMarketGateCache.set(key, { checkedAt: Date.now(), allowed });
+  return allowed;
 }
 
 async function isSpotLongMarketSupportive() {
@@ -4280,7 +4407,7 @@ async function isSpotLongMarketSupportive() {
 }
 
 function rankCandidatesWithDiversity(candidates: SignalCandidate[]) {
-  const openSignals = signals.filter(signal => signal.status === 'OPEN' && countsAsOpenExecution(signal.executionStatus));
+  const openSignals = openLedgerSignals();
   const selected: SignalCandidate[] = [];
   const pool = [...candidates];
   while (pool.length > 0) {
@@ -4315,7 +4442,10 @@ function rankCandidatesWithDiversity(candidates: SignalCandidate[]) {
         bestIndex = index;
       }
     }
-    selected.push(pool.splice(bestIndex, 1)[0]!);
+    const next = pool.splice(bestIndex, 1)[0]!;
+    if (!hasExcessDirectionalExposure(next) && !hasExcessCorrelation(next, selected)) {
+      selected.push(next);
+    }
   }
   return selected;
 }
@@ -4358,6 +4488,8 @@ async function scanMarket() {
             const draft = strategy.evaluate(candles, ticker);
             if (!draft) continue;
             if (market === 'spot' && draft.side !== 'LONG') continue;
+            if (symbolPauseUntil.get(ticker.symbol) && symbolPauseUntil.get(ticker.symbol)! > Date.now()) continue;
+            if (!(await isDirectionalMarketSupportive(draft.side, market))) continue;
             if (hasRecentSameDirectionSignal(draft.side) || hasOpenSameDirectionSignal(ticker.symbol, market, draft.side)) continue;
             const exitMode = pickExitMode(strategy.id, draft, timeframe, candles, selectedExitModes);
             const signal = buildSignal(strategy, draft, ticker, timeframe, candles, exitMode, market);
@@ -4372,6 +4504,7 @@ async function scanMarket() {
               components: score.components
             };
             if (!passesQualityGate(candidate)) continue;
+            if (hasExcessDirectionalExposure(candidate)) continue;
             rawCandidates.push(candidate);
           }
         }
@@ -4385,6 +4518,7 @@ async function scanMarket() {
         console.log(`[scan] market=${market} timeframe=${timeframe} batch=${batch.length} strategies=${evaluatedStrategies} raw=${rawCandidates.length} winners=${winnersBySymbolSide.size} ranked=${rankedCandidates.length}`);
         for (const candidate of rankedCandidates) {
           if (hasOpenSameDirectionSignal(candidate.signal.symbol, candidate.market, candidate.signal.side)) continue;
+          if (hasExcessDirectionalExposure(candidate)) continue;
           candidate.signal.reason = `${candidate.signal.reason} | Score ${candidate.score.toFixed(1)} | Momentum ${(candidate.components.momentum * 100).toFixed(0)} | Volume ${(candidate.components.volume * 100).toFixed(0)} | Alignment ${(candidate.components.alignment * 100).toFixed(0)} | RR ${(candidate.components.riskReward * 100).toFixed(0)}`;
           await applyExecutionPipeline(candidate.signal);
           signals.unshift(candidate.signal);
@@ -4422,6 +4556,37 @@ function getScanBatch<T>(items: T[], cursor: number, size: number) {
     batch,
     nextCursor: (start + size) % items.length
   };
+}
+
+function profitLockFromPeak(signal: TradeSignal) {
+  const risk = Math.max(signal.riskPct, 0.0001);
+  const peakR = Math.max(0, (signal.maxFavorablePnlPct ?? 0) / risk);
+  if (peakR >= 3) return risk * 2;
+  if (peakR >= 2) return risk * 1.2;
+  if (peakR >= 1.5) return risk * 0.75;
+  if (peakR >= 1) return risk * 0.25;
+  return 0;
+}
+
+function priceFromLockedPnl(signal: TradeSignal, lockedPnlPct: number) {
+  return signal.side === 'LONG'
+    ? signal.entry * (1 + lockedPnlPct / 100)
+    : signal.entry * (1 - lockedPnlPct / 100);
+}
+
+function closeLedgerSignal(signal: TradeSignal, status: TradeSignal['status'], closePrice: number, closeText: string) {
+  signal.status = status;
+  signal.closedAt = Date.now();
+  signal.closePrice = closePrice;
+  if (status === 'LOSS') {
+    symbolPauseUntil.set(signal.symbol, Date.now() + 6 * 60 * 60_000);
+  }
+  invalidateComputedCaches();
+  saveState();
+  broadcast('signalClosed', signal);
+  const payload = buildSignalCloseNotificationPayload(signal, closeText);
+  void notify(payload.title, payload.message, payload.level);
+  void deliverPrivateTelegramSignalClose(signal, closeText);
 }
 
 async function verifyTelegramDelivery() {
@@ -4480,39 +4645,60 @@ function updateOpenSignals() {
   for (const signal of signals.filter(s => s.status === 'OPEN')) {
     const ticker = (signal.market === 'futures' ? futuresTickers : tickers).get(signal.symbol);
     if (!ticker) continue;
+    const currentPnl = percent(signal.entry, ticker.price, signal.side);
+    signal.maxFavorablePnlPct = Math.max(signal.maxFavorablePnlPct ?? 0, currentPnl);
+    signal.profitLockPct = Math.max(signal.profitLockPct ?? 0, profitLockFromPeak(signal));
+    if ((signal.profitLockPct ?? 0) > 0) {
+      signal.profitProtectionArmedAt = signal.profitProtectionArmedAt ?? Date.now();
+      const lockedPrice = priceFromLockedPnl(signal, signal.profitLockPct ?? 0);
+      signal.trailingStop = typeof signal.trailingStop === 'number'
+        ? signal.side === 'LONG' ? Math.max(signal.trailingStop, lockedPrice) : Math.min(signal.trailingStop, lockedPrice)
+        : lockedPrice;
+    }
+
+    const peakPnl = signal.maxFavorablePnlPct ?? 0;
+    const givebackExit = peakPnl >= signal.riskPct * QUALITY_GATE.profitArmR
+      && currentPnl > 0
+      && currentPnl <= Math.max(signal.profitLockPct ?? 0, peakPnl * (1 - QUALITY_GATE.profitGivebackRatio));
+    if (givebackExit) {
+      closeLedgerSignal(signal, 'WIN', priceFromLockedPnl(signal, Math.max(signal.profitLockPct ?? currentPnl, currentPnl)), 'with profit-decay lock');
+      continue;
+    }
+
+    const hitProtectedStop = typeof signal.trailingStop === 'number'
+      && (signal.side === 'LONG' ? ticker.price <= signal.trailingStop : ticker.price >= signal.trailingStop)
+      && (signal.profitLockPct ?? 0) > 0;
+    if (hitProtectedStop) {
+      closeLedgerSignal(signal, 'WIN', signal.trailingStop ?? ticker.price, 'with protected profit');
+      continue;
+    }
+
     const hitStop = signal.side === 'LONG' ? ticker.price <= signal.stopLoss : ticker.price >= signal.stopLoss;
     const hitTarget = signal.side === 'LONG' ? ticker.price >= signal.takeProfit : ticker.price <= signal.takeProfit;
     if (hitStop) {
-      signal.status = 'LOSS';
-      signal.closedAt = Date.now();
-      signal.closePrice = signal.stopLoss;
-      const pnl = percent(signal.entry, signal.stopLoss, signal.side);
-      invalidateComputedCaches();
-      saveState();
-      broadcast('signalClosed', signal);
-      const payload = buildSignalCloseNotificationPayload(signal, 'with loss');
-      void notify(payload.title, payload.message, payload.level);
-      void deliverPrivateTelegramSignalClose(signal, 'with loss');
+      closeLedgerSignal(signal, 'LOSS', signal.stopLoss, 'with loss');
       continue;
     }
 
     if (hitTarget && !signal.profitProtectionArmedAt) {
       signal.profitProtectionArmedAt = Date.now();
       signal.extremePrice = ticker.price;
-      const trailGapPct = Math.max(signal.riskPct * 0.4, signal.expectedProfitPct * 0.2);
+      signal.maxFavorablePnlPct = Math.max(signal.maxFavorablePnlPct ?? 0, signal.expectedProfitPct);
+      signal.profitLockPct = Math.max(signal.profitLockPct ?? 0, profitLockFromPeak(signal));
+      const trailGapPct = Math.max(signal.riskPct * 0.25, signal.expectedProfitPct * 0.12);
       signal.trailingStop = signal.side === 'LONG'
-        ? Math.max(signal.entry, ticker.price * (1 - trailGapPct / 100))
-        : Math.min(signal.entry, ticker.price * (1 + trailGapPct / 100));
+        ? Math.max(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), ticker.price * (1 - trailGapPct / 100))
+        : Math.min(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), ticker.price * (1 + trailGapPct / 100));
     }
 
     if (signal.profitProtectionArmedAt) {
-      const trailGapPct = Math.max(signal.riskPct * 0.4, signal.expectedProfitPct * 0.2);
+      const trailGapPct = Math.max(signal.riskPct * 0.25, signal.expectedProfitPct * 0.12);
       signal.extremePrice = signal.side === 'LONG'
         ? Math.max(signal.extremePrice ?? ticker.price, ticker.price)
         : Math.min(signal.extremePrice ?? ticker.price, ticker.price);
       const proposedTrailingStop = signal.side === 'LONG'
-        ? Math.max(signal.entry, (signal.extremePrice ?? ticker.price) * (1 - trailGapPct / 100))
-        : Math.min(signal.entry, (signal.extremePrice ?? ticker.price) * (1 + trailGapPct / 100));
+        ? Math.max(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), (signal.extremePrice ?? ticker.price) * (1 - trailGapPct / 100))
+        : Math.min(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), (signal.extremePrice ?? ticker.price) * (1 + trailGapPct / 100));
       signal.trailingStop = typeof signal.trailingStop === 'number'
         ? (signal.side === 'LONG' ? Math.max(signal.trailingStop, proposedTrailingStop) : Math.min(signal.trailingStop, proposedTrailingStop))
         : proposedTrailingStop;
@@ -4520,30 +4706,12 @@ function updateOpenSignals() {
         ? ticker.price <= (signal.trailingStop ?? signal.entry)
         : ticker.price >= (signal.trailingStop ?? signal.entry);
       if (!hitTrailingStop) continue;
-      signal.status = 'WIN';
-      signal.closedAt = Date.now();
-      signal.closePrice = signal.trailingStop ?? ticker.price;
-      const pnl = percent(signal.entry, signal.closePrice, signal.side);
-      invalidateComputedCaches();
-      saveState();
-      broadcast('signalClosed', signal);
-      const payload = buildSignalCloseNotificationPayload(signal, 'with protected profit');
-      void notify(payload.title, payload.message, payload.level);
-      void deliverPrivateTelegramSignalClose(signal, 'with protected profit');
+      closeLedgerSignal(signal, 'WIN', signal.trailingStop ?? ticker.price, 'with protected profit');
       continue;
     }
 
     if (!hitTarget) continue;
-    signal.status = 'WIN';
-    signal.closedAt = Date.now();
-    signal.closePrice = signal.takeProfit;
-    const pnl = percent(signal.entry, signal.closePrice, signal.side);
-    invalidateComputedCaches();
-    saveState();
-    broadcast('signalClosed', signal);
-    const payload = buildSignalCloseNotificationPayload(signal, 'with profit');
-    void notify(payload.title, payload.message, payload.level);
-    void deliverPrivateTelegramSignalClose(signal, 'with profit');
+    closeLedgerSignal(signal, 'WIN', signal.takeProfit, 'with profit');
   }
 }
 
