@@ -14,7 +14,7 @@ type SymbolInfo = { symbol: string; baseAsset: string; quoteAsset: string };
 type MarketMode = 'spot' | 'futures';
 type StrategyMarketScope = 'spot' | 'futures' | 'all';
 type ScoreFilter = 'all' | 'green' | 'yellow' | 'red' | 'unscored';
-type Strategy = { id: string; name: string; risk: Risk; description: string };
+type Strategy = { id: string; name: string; risk: Risk; marketScope?: StrategyMarketScope; description: string };
 type Signal = {
   id: number;
   market: MarketMode;
@@ -938,6 +938,9 @@ function formatToastTitle(notification: Notification) {
 
 const marketScopeButtonActive = (scope: StrategyMarketScope, button: Exclude<StrategyMarketScope, 'all'>) =>
   scope === 'all' || scope === button;
+
+const strategyMarketLabel = (strategy: Strategy) =>
+  strategy.marketScope === 'spot' ? 'Spot' : strategy.marketScope === 'futures' ? 'Futures' : 'Spot + Futures';
 
 function formatToastSummary(notification: Notification) {
   const parts = parseNotificationMessage(notification.message);
@@ -3884,7 +3887,7 @@ function AutoTradePage({
             return <button key={strategy.id} type="button" className={isActive ? 'admin-strategy-card active' : 'admin-strategy-card'} onClick={() => toggleUserStrategy(strategy.id)}>
               <div>
                 <strong>{strategy.name}</strong>
-                <span>{strategy.risk === 'high' ? 'High risk' : 'Medium risk'} • {allTimeframes.filter(timeframe => timeframes.has(timeframe)).join(' / ')}</span>
+                <span>{strategyMarketLabel(strategy)} • {strategy.risk === 'high' ? 'High risk' : 'Medium risk'} • {allTimeframes.filter(timeframe => timeframes.has(timeframe)).join(' / ')}</span>
               </div>
               <b>{isActive ? 'ON' : 'OFF'}</b>
             </button>;
@@ -3895,7 +3898,7 @@ function AutoTradePage({
           {labStrategies.map(strategy => <article key={strategy.id} className="admin-strategy-card admin-strategy-shell">
             <div>
               <strong>{strategy.name}</strong>
-              <span>{strategy.risk === 'high' ? 'High risk' : 'Medium risk'}</span>
+              <span>{strategyMarketLabel(strategy)} • {strategy.risk === 'high' ? 'High risk' : 'Medium risk'}</span>
             </div>
             <b>LAB</b>
           </article>)}
@@ -4736,6 +4739,7 @@ function AutoTradePage({
                 const metrics = adminStrategyMetrics.get(strategy.id);
                 return <button key={strategy.id} type="button" className={isActive ? 'public-strategy-card active' : 'public-strategy-card'} onClick={() => toggleAdminStrategy(strategy.id)}>
                   <strong>{strategy.name}</strong>
+                  <small>{strategyMarketLabel(strategy)}</small>
                   <small>{metrics?.winRate ?? 0}% WR</small>
                   <small>{(metrics?.score ?? 0).toFixed(1)} score</small>
                   <div className="scoreline"><i style={{ width: `${metrics?.winRate ?? 0}%` }} /></div>
@@ -4750,6 +4754,7 @@ function AutoTradePage({
                 return <article key={strategy.id} className={isActive ? 'public-strategy-card active lab' : 'public-strategy-card lab'}>
                   <button type="button" onClick={() => toggleAdminStrategy(strategy.id)}>
                     <strong>{strategy.name}</strong>
+                    <small>{strategyMarketLabel(strategy)}</small>
                     <small>{adminStrategyMetrics.get(strategy.id)?.winRate ?? 0}% WR</small>
                     <small>{(adminStrategyMetrics.get(strategy.id)?.score ?? 0).toFixed(1)} score</small>
                     <div className="scoreline"><i style={{ width: `${adminStrategyMetrics.get(strategy.id)?.winRate ?? 0}%` }} /></div>
@@ -4908,7 +4913,7 @@ function AutoTradePage({
                 <button type="button" className="admin-strategy-main" onClick={() => toggleAdminStrategy(strategy.id)}>
                   <div>
                     <strong>{strategy.name}</strong>
-                    <span>{strategy.risk === 'high' ? 'High risk' : 'Medium risk'} • {allTimeframes.filter(timeframe => timeframes.has(timeframe)).join(' / ')}</span>
+                    <span>{strategyMarketLabel(strategy)} • {strategy.risk === 'high' ? 'High risk' : 'Medium risk'} • {allTimeframes.filter(timeframe => timeframes.has(timeframe)).join(' / ')}</span>
                   </div>
                   <b>{isActive ? 'ON' : 'OFF'}</b>
                 </button>
@@ -4923,7 +4928,7 @@ function AutoTradePage({
                 <button type="button" className="admin-strategy-main" onClick={() => toggleAdminStrategy(strategy.id)}>
                   <div>
                     <strong>{strategy.name}</strong>
-                    <span>{strategy.risk === 'high' ? 'High risk' : 'Medium risk'}</span>
+                    <span>{strategyMarketLabel(strategy)} • {strategy.risk === 'high' ? 'High risk' : 'Medium risk'}</span>
                   </div>
                   <b>{isActive ? 'ON' : 'OFF'}</b>
                 </button>

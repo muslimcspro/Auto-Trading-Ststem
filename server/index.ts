@@ -47,6 +47,7 @@ type Strategy = {
   id: string;
   name: string;
   risk: Risk;
+  marketScope: StrategyMarketScope;
   description: string;
   evaluate: (candles: Candle[], ticker: PriceTicker) => SignalDraft | null;
 };
@@ -2523,13 +2524,22 @@ async function deliverPrivateTelegramSignalClose(signal: TradeSignal, closeText?
 }
 
 function loadState() {
-  if (!fs.existsSync(STATE_FILE)) return;
+  if (!fs.existsSync(STATE_FILE)) {
+    selectedStrategies = new Set(strategies.map(strategy => strategy.id));
+    return;
+  }
   const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as { signals?: TradeSignal[]; notifications?: typeof notifications; nextSignalId?: number; selectedStrategies?: string[]; selectedTimeframes?: Timeframe[]; selectedExitMode?: ExitMode; selectedExitModes?: ExitMode[]; selectedMarketScope?: StrategyMarketScope; liveExecutionRules?: Partial<LiveExecutionRules>; telegramRuntimeSettings?: Partial<TelegramRuntimeSettings> };
   const signalRetentionStart = Date.now() - SIGNAL_RETENTION_MS;
   signals.push(...(data.signals ?? []).filter(signal => signal.openedAt >= signalRetentionStart));
   notifications.push(...(data.notifications ?? []));
   let repairedState = false;
-  if (Array.isArray(data.selectedStrategies)) selectedStrategies = new Set(data.selectedStrategies.filter(id => strategies.some(strategy => strategy.id === id)));
+  if (Array.isArray(data.selectedStrategies)) {
+    selectedStrategies = new Set(data.selectedStrategies.filter(id => strategies.some(strategy => strategy.id === id)));
+  }
+  if (selectedStrategies.size === 0) {
+    selectedStrategies = new Set(strategies.map(strategy => strategy.id));
+    repairedState = true;
+  }
   if (Array.isArray(data.selectedTimeframes)) selectedTimeframes = new Set(data.selectedTimeframes.filter((timeframe): timeframe is Timeframe => SUPPORTED_TIMEFRAMES.includes(timeframe)));
   const normalizedExitModes = Array.isArray(data.selectedExitModes)
     ? data.selectedExitModes.map((mode: string) => mode === 'precision' ? 'quick' : mode === 'runner' ? 'extended' : mode === 'adaptive' ? 'balanced' : mode).filter((mode): mode is ExitMode => mode === 'quick' || mode === 'extended' || mode === 'balanced')
@@ -2657,12 +2667,18 @@ const percent = (from: number, to: number, side: Side) =>
   side === 'LONG' ? ((to - from) / from) * 100 : ((from - to) / from) * 100;
 
 const QUALITY_GATE = {
-  minScore: 74,
-  minRewardMultiple: 2.5,
-  minConfidence: 72,
-  minAlignment: 0.72,
-  minVolume: 0.45,
-  minAdx: 20,
+  spotMinScore: 66,
+  futuresMinScore: 74,
+  spotMinRewardMultiple: 1.8,
+  futuresMinRewardMultiple: 2.4,
+  spotMinConfidence: 66,
+  futuresMinConfidence: 72,
+  spotMinAlignment: 0.55,
+  futuresMinAlignment: 0.68,
+  spotMinVolume: 0.32,
+  futuresMinVolume: 0.42,
+  spotMinAdx: 12,
+  futuresMinAdx: 18,
   maxSameDirectionOpen: 8,
   maxSameMarketDirectionOpen: 5,
   maxSameBaseAssetOpen: 3,
@@ -2684,6 +2700,7 @@ let spotLongMarketGateCache: { checkedAt: number; allowed: boolean } | null = nu
 const directionalMarketGateCache = new Map<string, { checkedAt: number; allowed: boolean }>();
 const strategyPauseUntil = new Map<string, number>();
 const symbolPauseUntil = new Map<string, number>();
+let ledgerNetPnlPeak = 0;
 
 function getRangeStartForKey(range: string, customFrom?: string) {
   const now = Date.now();
@@ -2770,6 +2787,42 @@ const adx = (candles: Candle[], period = 14) => {
   const sum = plusDi + minusDi;
   return sum > 0 ? (Math.abs(plusDi - minusDi) / sum) * 100 : 0;
 };
+
+function candleBodyRatio(candle: Candle) {
+  const range = Math.max(candle.high - candle.low, 0.00000001);
+  return Math.abs(candle.close - candle.open) / range;
+}
+
+function volumeRatio(candles: Candle[], period = 20) {
+  const latest = candles.at(-1)?.volume ?? 0;
+  const average = sma(candles.slice(-(period + 1), -1).map(candle => candle.volume), Math.min(period, Math.max(1, candles.length - 1)));
+  return average > 0 ? latest / average : 1;
+}
+
+function rollingVwap(candles: Candle[], period = 48) {
+  const scoped = candles.slice(-period);
+  const totalVolume = scoped.reduce((sum, candle) => sum + candle.volume, 0);
+  if (totalVolume <= 0) return scoped.at(-1)?.close ?? 0;
+  return scoped.reduce((sum, candle) => sum + candle.close * candle.volume, 0) / totalVolume;
+}
+
+function closePosition(candles: Candle[], lookback = 24) {
+  const scoped = candles.slice(-lookback);
+  const last = scoped.at(-1)?.close ?? 0;
+  const high = Math.max(...scoped.map(candle => candle.high));
+  const low = Math.min(...scoped.map(candle => candle.low));
+  return high > low ? (last - low) / (high - low) : 0.5;
+}
+
+function trendDirection(candles: Candle[]) {
+  const closes = candles.map(candle => candle.close);
+  const fast = ema(closes, 9);
+  const mid = ema(closes, 21);
+  const slow = ema(closes, 50);
+  if (fast > mid && mid > slow) return 1;
+  if (fast < mid && mid < slow) return -1;
+  return 0;
+}
 
 function recentSwingHigh(candles: Candle[], lookback: number) {
   const scoped = candles.slice(-lookback);
@@ -2988,75 +3041,107 @@ function buildAdvancedExitPlan(strategyId: string, draft: SignalDraft, ticker: P
 }
 
 const strategies: Strategy[] = [
-  { id: 'ema-trend-rider', name: 'EMA Trend Rider', risk: 'medium', description: 'Moving average alignment with clear volume momentum.', evaluate: (c, t) => {
+  { id: 'spot-trend-pullback', name: 'Spot Trend Pullback', risk: 'medium', marketScope: 'spot', description: 'Spot long after a healthy pullback into EMA support during an active uptrend.', evaluate: (c, t) => {
     const closes = c.map(x => x.close);
-    if (sma(closes, 9) > sma(closes, 21) && rsi(closes) > 54 && t.change24h > 0.8) return { side: 'LONG', confidence: 71, rr: 1.8, reason: 'EMA9 is above EMA21 with positive RSI momentum' };
-    return null;
-  }},
-  { id: 'rsi-reversion', name: 'RSI Mean Reversion', risk: 'medium', description: 'Reversal setup from oversold or overbought RSI zones.', evaluate: (c) => {
-    const value = rsi(c.map(x => x.close));
-    if (value < 28) return { side: 'LONG', confidence: 66, rr: 1.5, reason: 'RSI is in an oversold zone' };
-    if (value > 76) return { side: 'SHORT', confidence: 64, rr: 1.4, reason: 'RSI is in an overbought zone' };
-    return null;
-  }},
-  { id: 'volume-breakout', name: 'Volume Breakout', risk: 'high', description: 'Short-range breakout with strong volume expansion.', evaluate: (c) => {
     const last = c.at(-1)!;
-    const high = Math.max(...c.slice(-24, -1).map(x => x.high));
-    const avgVol = sma(c.slice(-24, -1).map(x => x.volume), 20);
-    if (last.close > high && last.volume > avgVol * 1.8) return { side: 'LONG', confidence: 74, rr: 2.2, reason: 'Resistance breakout confirmed by strong volume' };
+    const ema21 = ema(closes, 21);
+    const ema50 = ema(closes, 50);
+    const trend = last.close > ema21 && ema21 > ema50;
+    const heldSupport = last.low <= ema21 * 1.004 && last.close > ema21 && candleBodyRatio(last) > 0.42;
+    if (trend && heldSupport && rsi(closes) >= 48 && t.quoteVolume > 350000) {
+      return { side: 'LONG', confidence: 70, rr: 2.0, reason: 'Spot trend pullback held EMA21 support' };
+    }
     return null;
   }},
-  { id: 'range-flip', name: 'Range Flip', risk: 'medium', description: 'Former short-term resistance acting as support.', evaluate: (c) => {
+  { id: 'spot-breakout-retest', name: 'Spot Breakout Retest', risk: 'medium', marketScope: 'spot', description: 'Spot long after resistance breaks, retests, and confirms with volume.', evaluate: (c) => {
     const last = c.at(-1)!;
-    const prevHigh = Math.max(...c.slice(-18, -2).map(x => x.high));
-    if (c.at(-2)!.close > prevHigh && last.low <= prevHigh && last.close > prevHigh) return { side: 'LONG', confidence: 68, rr: 1.7, reason: 'Successful retest after breakout' };
+    const previous = c.at(-2)!;
+    const resistance = Math.max(...c.slice(-34, -2).map(x => x.high));
+    const retested = previous.close > resistance && last.low <= resistance * 1.003 && last.close > resistance;
+    if (retested && volumeRatio(c) >= 1.18 && closePosition(c) >= 0.58) {
+      return { side: 'LONG', confidence: 71, rr: 2.2, reason: 'Spot breakout retest confirmed above former resistance' };
+    }
     return null;
   }},
-  { id: 'momentum-scalp', name: 'Momentum Scalp', risk: 'high', description: 'Fast momentum move on short candles.', evaluate: (c, t) => {
-    const closes = c.map(x => x.close);
-    if (closes.at(-1)! > closes.at(-4)! * 1.006 && t.quoteVolume > 500000) return { side: 'LONG', confidence: 69, rr: 1.6, reason: 'Short-term momentum with solid liquidity' };
-    return null;
-  }},
-  { id: 'atr-expansion', name: 'ATR Expansion', risk: 'high', description: 'Range expansion after a compressed volatility phase.', evaluate: (c) => {
-    const recentAtr = atr(c.slice(-18), 14);
-    const olderAtr = atr(c.slice(-45, -18), 14);
-    if (olderAtr && recentAtr > olderAtr * 1.45) return { side: c.at(-1)!.close > c.at(-5)!.close ? 'LONG' : 'SHORT', confidence: 67, rr: 2.0, reason: 'ATR expansion after a quiet period' };
-    return null;
-  }},
-  { id: 'pullback-21', name: 'Pullback 21', risk: 'medium', description: 'Price pullback toward the 21-period average before continuation.', evaluate: (c) => {
-    const closes = c.map(x => x.close);
-    const m21 = sma(closes, 21);
+  { id: 'spot-vwap-reclaim', name: 'Spot VWAP Reclaim', risk: 'medium', marketScope: 'spot', description: 'Spot long when price reclaims VWAP with relative momentum and constructive RSI.', evaluate: (c, t) => {
     const last = c.at(-1)!;
-    if (sma(closes, 9) > m21 && last.low <= m21 && last.close > m21) return { side: 'LONG', confidence: 70, rr: 1.8, reason: 'Pullback held near the 21-period average' };
+    const previous = c.at(-2)!;
+    const vwap = rollingVwap(c, 48);
+    const reclaim = previous.close < vwap && last.close > vwap && last.close > last.open;
+    if (reclaim && rsi(c.map(x => x.close)) >= 50 && volumeRatio(c) >= 1.12 && t.change24h > -1) {
+      return { side: 'LONG', confidence: 68, rr: 1.9, reason: 'Spot VWAP reclaim with constructive momentum' };
+    }
     return null;
   }},
-  { id: 'bear-trend-short', name: 'Bear Trend Short', risk: 'high', description: 'Short setup during a clear bearish trend.', evaluate: (c, t) => {
-    const closes = c.map(x => x.close);
-    if (sma(closes, 9) < sma(closes, 21) && rsi(closes) < 43 && t.change24h < -1) return { side: 'SHORT', confidence: 70, rr: 1.9, reason: 'Bearish trend with negative momentum' };
-    return null;
-  }},
-  { id: 'micro-squeeze', name: 'Micro Squeeze', risk: 'high', description: 'Tight price compression before a potential expansion move.', evaluate: (c) => {
-    const ranges = c.slice(-12).map(x => (x.high - x.low) / x.close);
-    const tight = ranges.every(x => x < 0.006);
-    if (tight && c.at(-1)!.volume > sma(c.map(x => x.volume), 20) * 1.4) return { side: c.at(-1)!.close > c.at(-2)!.close ? 'LONG' : 'SHORT', confidence: 63, rr: 2.3, reason: 'Price compression with rising volume' };
-    return null;
-  }},
-  { id: 'vwap-proxy', name: 'VWAP Proxy', risk: 'medium', description: 'Approximate VWAP reclaim setup.', evaluate: (c) => {
-    const vwap = c.slice(-48).reduce((a, x) => a + x.close * x.volume, 0) / Math.max(1, c.slice(-48).reduce((a, x) => a + x.volume, 0));
-    if (c.at(-2)!.close < vwap && c.at(-1)!.close > vwap) return { side: 'LONG', confidence: 65, rr: 1.6, reason: 'Approximate VWAP reclaim' };
-    return null;
-  }},
-  { id: 'liquidity-sweep', name: 'Liquidity Sweep', risk: 'high', description: 'Local low sweep followed by a close back above it.', evaluate: (c) => {
+  { id: 'spot-liquidity-reversal', name: 'Spot Liquidity Reversal', risk: 'high', marketScope: 'spot', description: 'Spot long after a local low sweep recovers with a strong close.', evaluate: (c) => {
     const last = c.at(-1)!;
-    const priorLow = Math.min(...c.slice(-20, -1).map(x => x.low));
-    if (last.low < priorLow && last.close > priorLow) return { side: 'LONG', confidence: 68, rr: 2.1, reason: 'Local low sweep with a bullish close' };
+    const priorLow = Math.min(...c.slice(-28, -1).map(x => x.low));
+    const swept = last.low < priorLow && last.close > priorLow && last.close > last.open;
+    if (swept && candleBodyRatio(last) >= 0.48 && volumeRatio(c) >= 1.15) {
+      return { side: 'LONG', confidence: 69, rr: 2.1, reason: 'Spot liquidity sweep recovered above local lows' };
+    }
     return null;
   }},
-  { id: 'macd-proxy', name: 'MACD Proxy Shift', risk: 'medium', description: 'Momentum shift through moving-average spread.', evaluate: (c) => {
+  { id: 'futures-trend-continuation', name: 'Futures Trend Continuation', risk: 'medium', marketScope: 'futures', description: 'Futures long or short continuation with EMA stack, trend strength, and volume.', evaluate: (c, t) => {
     const closes = c.map(x => x.close);
-    const fast = sma(closes, 12);
-    const slow = sma(closes, 26);
-    if (fast > slow && closes.at(-1)! > sma(closes, 50)) return { side: 'LONG', confidence: 67, rr: 1.7, reason: 'Momentum shifted above the long average' };
+    const last = c.at(-1)!;
+    const direction = trendDirection(c);
+    const trendAdx = adx(c);
+    const vol = volumeRatio(c);
+    if (direction > 0 && trendAdx >= 18 && vol >= 1.05 && rsi(closes) >= 52 && t.change24h > -0.5) {
+      return { side: 'LONG', confidence: 73, rr: 2.5, reason: 'Futures trend continuation long with EMA stack and volume' };
+    }
+    if (direction < 0 && trendAdx >= 18 && vol >= 1.05 && rsi(closes) <= 48 && t.change24h < 0.5) {
+      return { side: 'SHORT', confidence: 73, rr: 2.5, reason: 'Futures trend continuation short with EMA stack and volume' };
+    }
+    if (last.close) return null;
+    return null;
+  }},
+  { id: 'futures-momentum-burst', name: 'Futures Momentum Burst', risk: 'high', marketScope: 'futures', description: 'Fast futures entry after a large directional candle and volume expansion.', evaluate: (c) => {
+    const last = c.at(-1)!;
+    const prev = c.at(-2)!;
+    const body = candleBodyRatio(last);
+    const vol = volumeRatio(c);
+    const movePct = ((last.close - prev.close) / Math.max(prev.close, 0.00000001)) * 100;
+    if (body >= 0.62 && vol >= 1.45 && movePct >= 0.45 && closePosition(c, 18) >= 0.72) {
+      return { side: 'LONG', confidence: 76, rr: 2.7, reason: 'Futures bullish momentum burst with volume expansion' };
+    }
+    if (body >= 0.62 && vol >= 1.45 && movePct <= -0.45 && closePosition(c, 18) <= 0.28) {
+      return { side: 'SHORT', confidence: 76, rr: 2.7, reason: 'Futures bearish momentum burst with volume expansion' };
+    }
+    return null;
+  }},
+  { id: 'futures-vwap-rejection', name: 'Futures VWAP Reclaim/Rejection', risk: 'medium', marketScope: 'futures', description: 'Futures long on VWAP reclaim or short on VWAP rejection with confirmation.', evaluate: (c) => {
+    const last = c.at(-1)!;
+    const prev = c.at(-2)!;
+    const vwap = rollingVwap(c, 60);
+    if (prev.close < vwap && last.close > vwap && last.close > last.open && volumeRatio(c) >= 1.12) {
+      return { side: 'LONG', confidence: 72, rr: 2.4, reason: 'Futures VWAP reclaim confirmed' };
+    }
+    if (prev.close > vwap && last.close < vwap && last.close < last.open && volumeRatio(c) >= 1.12) {
+      return { side: 'SHORT', confidence: 72, rr: 2.4, reason: 'Futures VWAP rejection confirmed' };
+    }
+    return null;
+  }},
+  { id: 'futures-failed-breakout', name: 'Futures Failed Breakout Reversal', risk: 'high', marketScope: 'futures', description: 'Futures reversal after a failed range breakout or breakdown.', evaluate: (c) => {
+    const last = c.at(-1)!;
+    const rangeHigh = Math.max(...c.slice(-32, -1).map(x => x.high));
+    const rangeLow = Math.min(...c.slice(-32, -1).map(x => x.low));
+    if (last.high > rangeHigh && last.close < rangeHigh && candleBodyRatio(last) >= 0.45 && volumeRatio(c) >= 1.2) {
+      return { side: 'SHORT', confidence: 74, rr: 2.6, reason: 'Futures failed breakout reversed below range high' };
+    }
+    if (last.low < rangeLow && last.close > rangeLow && candleBodyRatio(last) >= 0.45 && volumeRatio(c) >= 1.2) {
+      return { side: 'LONG', confidence: 74, rr: 2.6, reason: 'Futures failed breakdown reclaimed range low' };
+    }
+    return null;
+  }},
+  { id: 'futures-compression-release', name: 'Futures Compression Release', risk: 'high', marketScope: 'futures', description: 'Futures breakout from tight compression with direction decided by the release candle.', evaluate: (c) => {
+    const ranges = c.slice(-12, -1).map(x => (x.high - x.low) / Math.max(x.close, 0.00000001));
+    const compressed = ranges.length > 0 && ranges.every(value => value < 0.0075);
+    const last = c.at(-1)!;
+    if (!compressed || volumeRatio(c) < 1.35 || candleBodyRatio(last) < 0.55) return null;
+    if (last.close > last.open && closePosition(c, 18) > 0.7) return { side: 'LONG', confidence: 75, rr: 2.8, reason: 'Futures compression released upward' };
+    if (last.close < last.open && closePosition(c, 18) < 0.3) return { side: 'SHORT', confidence: 75, rr: 2.8, reason: 'Futures compression released downward' };
     return null;
   }}
 ];
@@ -4336,26 +4421,24 @@ function passesQualityGate(candidate: SignalCandidate) {
   const rewardMultiple = candidate.signal.riskPct > 0
     ? candidate.signal.expectedProfitPct / candidate.signal.riskPct
     : Infinity;
+  const isFutures = candidate.market === 'futures';
   const strategyScoreFloor = ({
-    'momentum-scalp': 78,
-    'rsi-reversion': 80,
-    'bear-trend-short': 74,
-    'pullback-21': 70,
-    'volume-breakout': 72,
-    'micro-squeeze': 78,
-    'atr-expansion': 76,
-    'liquidity-sweep': 74,
-    'vwap-proxy': 74,
-    'range-flip': 72,
-    'macd-proxy': 74,
-    'ema-trend-rider': 72
-  } as Record<string, number>)[candidate.signal.strategyId] ?? QUALITY_GATE.minScore;
-  return candidate.score >= Math.max(QUALITY_GATE.minScore, strategyScoreFloor)
-    && rewardMultiple >= QUALITY_GATE.minRewardMultiple
-    && candidate.signal.confidence >= QUALITY_GATE.minConfidence
-    && candidate.components.alignment >= QUALITY_GATE.minAlignment
-    && candidate.components.volume >= QUALITY_GATE.minVolume
-    && adx(candidate.candles) >= QUALITY_GATE.minAdx;
+    'spot-trend-pullback': 66,
+    'spot-breakout-retest': 68,
+    'spot-vwap-reclaim': 66,
+    'spot-liquidity-reversal': 68,
+    'futures-trend-continuation': 74,
+    'futures-momentum-burst': 76,
+    'futures-vwap-rejection': 74,
+    'futures-failed-breakout': 75,
+    'futures-compression-release': 76
+  } as Record<string, number>)[candidate.signal.strategyId] ?? (isFutures ? QUALITY_GATE.futuresMinScore : QUALITY_GATE.spotMinScore);
+  return candidate.score >= strategyScoreFloor
+    && rewardMultiple >= (isFutures ? QUALITY_GATE.futuresMinRewardMultiple : QUALITY_GATE.spotMinRewardMultiple)
+    && candidate.signal.confidence >= (isFutures ? QUALITY_GATE.futuresMinConfidence : QUALITY_GATE.spotMinConfidence)
+    && candidate.components.alignment >= (isFutures ? QUALITY_GATE.futuresMinAlignment : QUALITY_GATE.spotMinAlignment)
+    && candidate.components.volume >= (isFutures ? QUALITY_GATE.futuresMinVolume : QUALITY_GATE.spotMinVolume)
+    && adx(candidate.candles) >= (isFutures ? QUALITY_GATE.futuresMinAdx : QUALITY_GATE.spotMinAdx);
 }
 
 function isMacroUptrend(candles: Candle[]) {
@@ -4386,9 +4469,11 @@ async function isDirectionalMarketSupportive(side: Side, market: TradingVenue) {
     fetchCandles('ETHUSDT', '1h', market, 80).catch(() => []),
     fetchCandles('ETHUSDT', '4h', market, 80).catch(() => [])
   ]);
-  const btcOk = side === 'LONG' ? isMacroUptrend(btc1h) && isMacroUptrend(btc4h) : isMacroDowntrend(btc1h) && isMacroDowntrend(btc4h);
-  const ethOk = side === 'LONG' ? isMacroUptrend(eth1h) && isMacroUptrend(eth4h) : isMacroDowntrend(eth1h) && isMacroDowntrend(eth4h);
-  const allowed = btcOk || ethOk;
+  const upVotes = [btc1h, btc4h, eth1h, eth4h].filter(isMacroUptrend).length;
+  const downVotes = [btc1h, btc4h, eth1h, eth4h].filter(isMacroDowntrend).length;
+  const allowed = side === 'LONG'
+    ? upVotes >= 1 && downVotes < 3
+    : downVotes >= 1 && upVotes < 3;
   directionalMarketGateCache.set(key, { checkedAt: Date.now(), allowed });
   return allowed;
 }
@@ -4454,9 +4539,13 @@ async function scanMarket() {
   if (scanRunning || selectedStrategies.size === 0 || selectedTimeframes.size === 0) return;
   scanRunning = true;
   const version = scanVersion;
-  const active = strategies.filter(s => selectedStrategies.has(s.id));
   try {
     const scanVenue = async (market: TradingVenue, source: Map<string, PriceTicker>) => {
+      const active = strategies.filter(strategy =>
+        selectedStrategies.has(strategy.id)
+        && (strategy.marketScope === 'all' || strategy.marketScope === market)
+      );
+      if (active.length === 0) return;
       if (market === 'spot' && !(await isSpotLongMarketSupportive())) {
         console.log('[scan] spot long gate blocked: BTC/ETH 1h trend is not above EMA21/EMA50');
         return;
@@ -4589,6 +4678,32 @@ function closeLedgerSignal(signal: TradeSignal, status: TradeSignal['status'], c
   void deliverPrivateTelegramSignalClose(signal, closeText);
 }
 
+function ledgerNetPnl() {
+  return signals.reduce((sum, signal) => sum + signalNetPnl(signal), 0);
+}
+
+function ledgerNetPnlFloor(peak: number) {
+  if (peak >= 20) return peak * 0.72;
+  if (peak >= 10) return peak * 0.62;
+  if (peak >= 5) return peak * 0.48;
+  if (peak >= 3) return peak * 0.35;
+  return -Infinity;
+}
+
+function protectLedgerNetPnl() {
+  const current = ledgerNetPnl();
+  ledgerNetPnlPeak = Math.max(ledgerNetPnlPeak, current);
+  const floor = ledgerNetPnlFloor(ledgerNetPnlPeak);
+  if (!Number.isFinite(floor) || current > floor) return;
+  for (const signal of signals.filter(item => item.status === 'OPEN')) {
+    const ticker = (signal.market === 'futures' ? futuresTickers : tickers).get(signal.symbol);
+    if (!ticker) continue;
+    const pnl = percent(signal.entry, ticker.price, signal.side);
+    closeLedgerSignal(signal, pnl >= 0 ? 'WIN' : 'LOSS', ticker.price, `with Net PnL floor ${current.toFixed(2)}%`);
+  }
+  ledgerNetPnlPeak = Math.max(0, ledgerNetPnl());
+}
+
 async function verifyTelegramDelivery() {
   if (!PUBLIC_TELEGRAM_BOT_TOKEN) {
     console.warn('[telegram] public verification skipped: bot token missing');
@@ -4713,6 +4828,7 @@ function updateOpenSignals() {
     if (!hitTarget) continue;
     closeLedgerSignal(signal, 'WIN', signal.takeProfit, 'with profit');
   }
+  protectLedgerNetPnl();
 }
 
 function getStats(): StrategyStats[] {
