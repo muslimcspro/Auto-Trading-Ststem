@@ -12,6 +12,7 @@ type Timeframe = '5m' | '10m' | '15m' | '1h' | '2h' | '4h' | '1d';
 type Side = 'LONG' | 'SHORT';
 type ExitMode = 'balanced' | 'quick' | 'extended';
 type TradingVenue = 'spot' | 'futures';
+type ExecutionVenue = TradingVenue | 'both';
 type StrategyMarketScope = 'spot' | 'futures' | 'all';
 
 type SymbolInfo = {
@@ -115,7 +116,7 @@ function countsAsOpenExecution(status?: TradeSignal['executionStatus']) {
 }
 
 type LiveExecutionRules = {
-  venueMode: TradingVenue;
+  venueMode: ExecutionVenue;
   executionMode: 'test' | 'live';
   killSwitch: boolean;
   ruleToggles: {
@@ -1571,7 +1572,7 @@ async function signedBinanceMutableRequest<T>(baseUrl: string, route: string, ap
 
 function buildLiveExecutionRulesPatch(input: Partial<LiveExecutionRules>): LiveExecutionRules {
   return {
-    venueMode: (input.venueMode === 'futures' ? 'futures' : 'spot') as TradingVenue,
+    venueMode: (input.venueMode === 'futures' || input.venueMode === 'both' ? input.venueMode : 'spot') as ExecutionVenue,
     executionMode: input.executionMode === 'live' ? 'live' : 'test',
     killSwitch: input.killSwitch !== false,
     ruleToggles: {
@@ -1930,6 +1931,103 @@ async function closeAllOpenFuturesPositions(reason: string) {
   return { closed, failed };
 }
 
+async function closeRawSpotBalance(asset: string, freeQuantity: number) {
+  const credentials = decryptSecret();
+  if (!credentials) throw new Error('Missing Binance credentials.');
+  if (!binanceVaultState.connected) throw new Error('Binance connection is not verified.');
+  const symbol = `${asset}USDT`;
+  const rules = getSymbolRules(symbol, 'spot');
+  if (!rules) throw new Error(`No Binance Spot USDT market for ${asset}.`);
+  const quantity = formatBinanceQuantity(freeQuantity, rules).formatted;
+  const order = await signedBinanceMutableRequest<{ orderId?: number | string }>(BINANCE_REST, '/api/v3/order', credentials.apiKey, credentials.secretKey, {
+    symbol,
+    side: 'SELL',
+    type: 'MARKET',
+    quantity
+  });
+  return { closed: true, symbol, closeOrderId: order.orderId != null ? String(order.orderId) : '' };
+}
+
+async function closeAllOpenSpotPositions(reason: string) {
+  binanceWalletCache = null;
+  const wallet = await readBinanceWalletSummary();
+  const closed: string[] = [];
+  const failed: { symbol: string; message: string }[] = [];
+  const sellableBalances = wallet.balances.filter(balance =>
+    balance.asset !== 'USDT'
+    && balance.free > 0
+    && balance.valueUsdt > 0
+  );
+  for (const balance of sellableBalances) {
+    const symbol = `${balance.asset}USDT`;
+    try {
+      const rules = getSymbolRules(symbol, 'spot');
+      if (!rules) throw new Error(`No Binance Spot USDT market for ${balance.asset}.`);
+      if (rules.minNotional && balance.free * balance.priceUsdt < rules.minNotional) {
+        throw new Error(`Binance Min Notional ${rules.minNotional.toFixed(2)} USDT`);
+      }
+      const closeResult = await closeRawSpotBalance(balance.asset, balance.free);
+      if (!closeResult) continue;
+      closed.push(symbol);
+      const signal = signals.find(item =>
+        item.market === 'spot'
+        && item.executionStatus === 'live_accepted'
+        && item.status === 'OPEN'
+        && item.symbol === symbol
+      );
+      if (signal) {
+        const closePrice = tickers.get(symbol)?.price ?? balance.priceUsdt;
+        signal.status = signalOpenPnlPct(signal, closePrice) >= 0 ? 'WIN' : 'LOSS';
+        signal.closedAt = Date.now();
+        signal.closePrice = closePrice || signal.closePrice;
+        signal.binanceCloseOrderId = closeResult.closeOrderId || signal.binanceCloseOrderId;
+        signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), `Binance spot manual close: ${reason}`]));
+        const payload = buildSignalCloseNotificationPayload(signal, reason);
+        void notify(payload.title, payload.message, payload.level);
+        void deliverPrivateTelegramSignalClose(signal, reason);
+      }
+    } catch (error) {
+      failed.push({ symbol, message: error instanceof Error ? error.message : 'Close order failed.' });
+    }
+  }
+  if (closed.length > 0) {
+    invalidateComputedCaches();
+    saveState();
+    broadcast('dashboard', getDashboardPayload());
+  }
+  return { closed, failed };
+}
+
+function closeOpenSignalPages(venues: Set<TradingVenue>, reason: string) {
+  let closedCount = 0;
+  for (const signal of signals) {
+    if (!venues.has(signal.market) || signal.status !== 'OPEN' || !countsAsOpenExecution(signal.executionStatus)) continue;
+    const marketPrice = signal.market === 'futures'
+      ? futuresTickers.get(signal.symbol)?.price
+      : tickers.get(signal.symbol)?.price;
+    const closePrice = marketPrice ?? signal.closePrice ?? signal.entry;
+    signal.status = signalOpenPnlPct(signal, closePrice) >= 0 ? 'WIN' : 'LOSS';
+    signal.closedAt = Date.now();
+    signal.closePrice = closePrice;
+    signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), `Manual close page reset: ${reason}`]));
+    closedCount += 1;
+  }
+  if (closedCount > 0) {
+    invalidateComputedCaches();
+    saveState();
+    broadcast('dashboard', getDashboardPayload());
+  }
+  return closedCount;
+}
+
+function reEnableAllStrategies() {
+  selectedStrategies = new Set(strategies.map(strategy => strategy.id));
+  scanVersion++;
+  invalidateComputedCaches();
+  saveState();
+  broadcast('dashboard', getDashboardPayload());
+}
+
 async function monitorLiveFuturesProtection() {
   if (liveProtectionBusy) return;
   if (!binanceVaultState.connected || liveExecutionRules.executionMode !== 'live') return;
@@ -2047,9 +2145,10 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
   if (signal.market === 'futures' && riskControlUntil > Date.now()) failedRules.push('Binance Symbol Risk Control');
   if (riskControlUntil && riskControlUntil <= Date.now()) futuresRiskControlCooldown.delete(signal.symbol);
   if (rules.killSwitch) failedRules.push('Kill Switch');
-  if (rules.ruleToggles.tradingVenue && signal.market !== rules.venueMode) failedRules.push('Trading Venue');
-  if (rules.ruleToggles.allowedDirection && rules.allowedDirection === 'long-only' && signal.side !== 'LONG') failedRules.push('Allowed Direction');
-  if (rules.ruleToggles.allowedDirection && rules.allowedDirection === 'short-only' && signal.side !== 'SHORT') failedRules.push('Allowed Direction');
+  if (rules.ruleToggles.tradingVenue && rules.venueMode !== 'both' && signal.market !== rules.venueMode) failedRules.push('Trading Venue');
+  if (signal.market === 'spot' && signal.side !== 'LONG') failedRules.push('Allowed Direction');
+  if (signal.market === 'futures' && rules.ruleToggles.allowedDirection && rules.allowedDirection === 'long-only' && signal.side !== 'LONG') failedRules.push('Allowed Direction');
+  if (signal.market === 'futures' && rules.ruleToggles.allowedDirection && rules.allowedDirection === 'short-only' && signal.side !== 'SHORT') failedRules.push('Allowed Direction');
   const rankedStrategyIds = getRankedStrategyIds();
   const allowedStrategyIds = rules.executionSource === 'best-single'
     ? new Set(rankedStrategyIds.slice(0, 1))
@@ -2566,7 +2665,7 @@ function loadState() {
         ...liveExecutionRules.ruleToggles,
         ...data.liveExecutionRules.ruleToggles
       },
-      venueMode: data.liveExecutionRules.venueMode === 'futures' ? 'futures' : 'spot',
+      venueMode: data.liveExecutionRules.venueMode === 'futures' || data.liveExecutionRules.venueMode === 'both' ? data.liveExecutionRules.venueMode : 'spot',
       executionMode: data.liveExecutionRules.executionMode === 'live' ? 'live' : 'test',
       killSwitch: data.liveExecutionRules.killSwitch !== false,
       executionSource: data.liveExecutionRules.executionSource === 'top-2' || data.liveExecutionRules.executionSource === 'top-4' || data.liveExecutionRules.executionSource === 'custom' ? data.liveExecutionRules.executionSource : 'best-single',
@@ -5079,7 +5178,11 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
     const openPnl = acceptedAnalyticsBase.filter(signal => signal.status === 'OPEN').reduce((sum, signal) => sum + pnlFor(signal), 0);
     const closedPnl = acceptedAnalyticsBase.filter(signal => signal.status !== 'OPEN').reduce((sum, signal) => sum + pnlFor(signal), 0);
     const wallet = await readBinanceWalletSummary();
-    const currentCapital = marketFilter === 'futures' ? wallet.futuresTotalUsdt : wallet.totalValueUsdt;
+    const currentCapital = marketFilter === 'futures'
+      ? wallet.futuresTotalUsdt
+      : marketFilter === 'spot'
+        ? wallet.totalValueUsdt
+        : wallet.totalValueUsdt + wallet.futuresTotalUsdt;
     const startingBalance = currentCapital - (closedPnl / 100) * currentCapital;
     const scoreBase = acceptedAnalyticsBeforeScore;
     const filterCounts = {
@@ -5292,7 +5395,9 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
     const closedPnl = analyticsRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
     const currentCapital = marketFilter === 'futures'
       ? wallet.futuresTotalUsdt
-      : wallet.totalValueUsdt;
+      : marketFilter === 'spot'
+        ? wallet.totalValueUsdt
+        : wallet.totalValueUsdt + wallet.futuresTotalUsdt;
     const startingBalance = currentCapital - (closedPnl / 100) * currentCapital;
     const scoreBase = acceptedAnalyticsBeforeScore;
     const filterCounts = {
@@ -5555,10 +5660,37 @@ app.get('/api/binance/wallet', requireAuth, async (_req, res) => {
 app.post('/api/binance/futures/close-all', requireAdmin, async (_req, res) => {
   try {
     const result = await closeAllOpenFuturesPositions('Close All Futures');
+    const pageClosedCount = closeOpenSignalPages(new Set<TradingVenue>(['futures']), 'Close All Futures');
+    reEnableAllStrategies();
     binanceWalletCache = null;
-    res.json({ ok: result.failed.length === 0, closedCount: result.closed.length, failedCount: result.failed.length, ...result });
+    res.json({ ok: result.failed.length === 0, closedCount: result.closed.length + pageClosedCount, failedCount: result.failed.length, ...result, pageClosedCount });
   } catch (error) {
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : 'Unable to close Binance Futures positions.' });
+  }
+});
+app.post('/api/binance/spot/close-all', requireAdmin, async (_req, res) => {
+  try {
+    const result = await closeAllOpenSpotPositions('Close All Spot');
+    const pageClosedCount = closeOpenSignalPages(new Set<TradingVenue>(['spot']), 'Close All Spot');
+    reEnableAllStrategies();
+    binanceWalletCache = null;
+    res.json({ ok: result.failed.length === 0, closedCount: result.closed.length + pageClosedCount, failedCount: result.failed.length, ...result, pageClosedCount });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : 'Unable to close Binance Spot positions.' });
+  }
+});
+app.post('/api/binance/both/close-all', requireAdmin, async (_req, res) => {
+  try {
+    const spot = await closeAllOpenSpotPositions('Close All Spot + Futures');
+    const futures = await closeAllOpenFuturesPositions('Close All Spot + Futures');
+    const pageClosedCount = closeOpenSignalPages(new Set<TradingVenue>(['spot', 'futures']), 'Close All Spot + Futures');
+    reEnableAllStrategies();
+    binanceWalletCache = null;
+    const failed = [...spot.failed, ...futures.failed];
+    const closed = [...spot.closed, ...futures.closed];
+    res.json({ ok: failed.length === 0, closedCount: closed.length + pageClosedCount, failedCount: failed.length, closed, failed, pageClosedCount });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : 'Unable to close Binance Spot and Futures positions.' });
   }
 });
 app.post('/api/binance/connection', requireAdmin, rateLimit('binance-connection', { windowMs: 15 * 60 * 1000, max: 5 }), async (req, res) => {

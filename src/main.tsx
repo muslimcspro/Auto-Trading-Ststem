@@ -12,6 +12,7 @@ type Ticker = { symbol: string; price: number; change24h: number; quoteVolume: n
 type ChartCandle = { openTime: number; open: number; high: number; low: number; close: number; volume: number; closeTime: number };
 type SymbolInfo = { symbol: string; baseAsset: string; quoteAsset: string };
 type MarketMode = 'spot' | 'futures';
+type ExecutionVenueMode = MarketMode | 'both';
 type StrategyMarketScope = 'spot' | 'futures' | 'all';
 type ScoreFilter = 'all' | 'green' | 'yellow' | 'red' | 'unscored';
 type Strategy = { id: string; name: string; risk: Risk; marketScope?: StrategyMarketScope; description: string };
@@ -300,7 +301,7 @@ type TelegramConfig = {
 const PRIVATE_TELEGRAM_BOT_FALLBACK_USERNAME = 'DirectTradeAlerts71Bot';
 
 type LiveRulesPayload = {
-  venueMode: MarketMode;
+  venueMode: ExecutionVenueMode;
   executionMode: 'test' | 'live';
   killSwitch: boolean;
   ruleToggles: {
@@ -344,7 +345,7 @@ const defaultLiveRuleToggles: LiveRulesPayload['ruleToggles'] = {
   dailyLoss: true
 };
 
-type TradingVenue = 'spot' | 'futures';
+type TradingVenue = MarketMode;
 const allTimeframes: Timeframe[] = ['5m', '10m', '15m', '1h', '2h', '4h', '1d'];
 
 const normalizeBinanceConnection = (value?: Partial<BinanceConnection> | null): BinanceConnection => ({
@@ -1810,7 +1811,10 @@ function AutoTradePage({
 }) {
   const [portalView, setPortalView] = useState<'login' | 'user' | 'admin'>('login');
   const [capital] = useState(() => readAutoTradeSetting('autoTrade.capital', '25000'));
-  const [venueMode, setVenueMode] = useState<MarketMode>(() => readAutoTradeSetting('autoTrade.venueMode', 'spot') === 'futures' ? 'futures' : 'spot');
+  const [venueMode, setVenueMode] = useState<ExecutionVenueMode>(() => {
+    const savedVenue = readAutoTradeSetting('autoTrade.venueMode', 'spot');
+    return savedVenue === 'futures' || savedVenue === 'both' ? savedVenue : 'spot';
+  });
   const [riskPerTrade, setRiskPerTrade] = useState(() => readAutoTradeSetting('autoTrade.riskPerTrade', '1.5'));
   const [maxTrades, setMaxTrades] = useState(() => readAutoTradeSetting('autoTrade.maxTrades', '6'));
   const [dailyLoss, setDailyLoss] = useState(() => readAutoTradeSetting('autoTrade.dailyLoss', '3'));
@@ -2286,18 +2290,19 @@ function AutoTradePage({
     }
   };
 
-  const closeAllFuturesPositions = async () => {
+  const closeAllVenuePositions = async (venue: ExecutionVenueMode) => {
     if (portalView !== 'admin') return;
-    const confirmed = window.confirm('Close every open Binance Futures position now? This sends real MARKET close orders.');
+    const venueLabel = venue === 'both' ? 'Spot and Futures' : venue === 'spot' ? 'Spot' : 'Futures';
+    const confirmed = window.confirm(`Close every open Binance ${venueLabel} position now? This sends real MARKET close orders and re-enables all strategies.`);
     if (!confirmed) return;
-    setRulesSaveMessage('Closing all Binance Futures positions...');
+    setRulesSaveMessage(`Closing all Binance ${venueLabel} positions...`);
     try {
-      const response = await api<{ ok: boolean; closedCount: number; failedCount: number; message?: string }>('/api/binance/futures/close-all', {
+      const response = await api<{ ok: boolean; closedCount: number; failedCount: number; message?: string }>(`/api/binance/${venue}/close-all`, {
         method: 'POST'
       });
       await refreshBinanceWallet();
       window.dispatchEvent(new CustomEvent(livePortfolioRefreshEvent));
-      setRulesSaveMessage(`Close all sent. Closed: ${response.closedCount}. Failed: ${response.failedCount}.`);
+      setRulesSaveMessage(`Close all sent. Closed: ${response.closedCount}. Failed: ${response.failedCount}. Strategies re-enabled.`);
     } catch {
       setRulesSaveMessage('Close all failed. Check Binance permissions and server logs.');
     }
@@ -2309,7 +2314,7 @@ function AutoTradePage({
       const resolvedDailyLoss = Math.max(0, dailyLossUsesCustom ? (Number(customDailyLossLimit) || 3) : 3);
       const effectiveRuleToggles: LiveRulesPayload['ruleToggles'] = {
         tradingVenue: true,
-        allowedDirection: venueMode === 'futures',
+        allowedDirection: venueMode !== 'spot',
         executionSource: false,
         openTradeLimit: !openTradeLimitUnlimited,
         minRiskReward: false,
@@ -2346,7 +2351,7 @@ function AutoTradePage({
           portfolioFloorLockPct: Number(portfolioFloorLockPct)
         })
       });
-      localStorage.setItem('autoTrade.capital', venueMode === 'spot' ? String(binanceWallet.totalValueUsdt) : String(binanceWallet.futuresTotalUsdt));
+      localStorage.setItem('autoTrade.capital', String(liveCapitalValue));
       localStorage.setItem('autoTrade.riskPerTrade', riskPerTrade);
       localStorage.setItem('autoTrade.maxTrades', String(resolvedMaxTrades));
       localStorage.setItem('autoTrade.dailyLoss', String(resolvedDailyLoss));
@@ -2411,7 +2416,7 @@ function AutoTradePage({
       range: portfolioTradesRange,
       status: portfolioTradesStatusFilter,
       side: portfolioTradesSideFilter,
-      market: venueMode,
+      market: venueMode === 'both' ? 'all' : venueMode,
       timeframe: portfolioTradesTimeframeFilter,
       mode: portfolioTradesExecutionProfileFilter,
       score: portfolioTradesScoreFilter,
@@ -2524,7 +2529,11 @@ function AutoTradePage({
   };
 
 
-  const liveCapitalValue = venueMode === 'spot' ? binanceWallet.totalValueUsdt : binanceWallet.futuresTotalUsdt;
+  const liveCapitalValue = venueMode === 'both'
+    ? binanceWallet.totalValueUsdt + binanceWallet.futuresTotalUsdt
+    : venueMode === 'spot'
+      ? binanceWallet.totalValueUsdt
+      : binanceWallet.futuresTotalUsdt;
   const capitalValue = autoMode === 'live' ? liveCapitalValue : Number(capital) || 0;
   const visibleBinanceBalances = useMemo(
     () => hideSmallBinanceAssets ? binanceWallet.balances.filter(balance => balance.valueUsdt >= 1) : binanceWallet.balances,
@@ -2735,7 +2744,7 @@ function AutoTradePage({
     const sideMatch = portfolioTradesSideFilter === 'all'
       || (portfolioTradesSideFilter === 'long' && row.side === 'LONG')
       || (portfolioTradesSideFilter === 'short' && row.side === 'SHORT');
-    return inRange && row.market === venueMode && statusMatch && sideMatch && scoreMatches(row, portfolioTradesScoreFilter);
+    return inRange && (venueMode === 'both' || row.market === venueMode) && statusMatch && sideMatch && scoreMatches(row, portfolioTradesScoreFilter);
   });
   const normalizedPortfolioTradeQuery = portfolioTradeQuery.trim().toUpperCase();
   const normalizedPortfolioRejectedTradeQuery = portfolioRejectedTradeQuery.trim().toUpperCase();
@@ -2772,7 +2781,7 @@ function AutoTradePage({
         const stamp = signalTimestamp(signal);
         const inRange = stamp >= portfolioTradesRangeStart && stamp <= portfolioTradesRangeEnd;
         const accepted = acceptedBrokerStatuses.has(signal.executionStatus ?? 'pending');
-        const marketMatch = signal.market === venueMode;
+        const marketMatch = venueMode === 'both' || signal.market === venueMode;
         const statusMatch = portfolioTradesStatusFilter === 'all'
           || (portfolioTradesStatusFilter === 'open' && signal.status === 'OPEN')
           || (portfolioTradesStatusFilter === 'closed' && signal.status !== 'OPEN')
@@ -2817,7 +2826,7 @@ function AutoTradePage({
         .filter(row => {
           const stamp = signalTimestamp(row);
           const inRange = stamp >= portfolioTradesRangeStart && stamp <= portfolioTradesRangeEnd;
-          const marketMatch = row.market === venueMode;
+          const marketMatch = venueMode === 'both' || row.market === venueMode;
           const sideMatch = portfolioTradesSideFilter === 'all'
             || (portfolioTradesSideFilter === 'long' && row.side === 'LONG')
             || (portfolioTradesSideFilter === 'short' && row.side === 'SHORT');
@@ -2853,7 +2862,7 @@ function AutoTradePage({
         const stamp = signalTimestamp(signal);
         const inRange = stamp >= portfolioTradesRangeStart && stamp <= portfolioTradesRangeEnd;
         const rejected = signal.executionStatus === 'rejected' || signal.executionStatus === 'blocked' || signal.executionStatus === 'live_failed' || signal.executionStatus === 'test_failed';
-        const marketMatch = signal.market === venueMode;
+        const marketMatch = venueMode === 'both' || signal.market === venueMode;
         const sideMatch = portfolioTradesSideFilter === 'all'
           || (portfolioTradesSideFilter === 'long' && signal.side === 'LONG')
           || (portfolioTradesSideFilter === 'short' && signal.side === 'SHORT');
@@ -2891,7 +2900,7 @@ function AutoTradePage({
       return activePortfolioTradeRows.filter(row => {
         const stamp = signalTimestamp(row);
         const inRange = stamp >= portfolioTradesRangeStart && stamp <= portfolioTradesRangeEnd;
-        const marketMatch = row.market === venueMode;
+        const marketMatch = venueMode === 'both' || row.market === venueMode;
         return inRange && marketMatch;
       });
     }
@@ -2899,7 +2908,7 @@ function AutoTradePage({
       const stamp = signalTimestamp(signal);
       const inRange = stamp >= portfolioTradesRangeStart && stamp <= portfolioTradesRangeEnd;
       const accepted = acceptedBrokerStatuses.has(signal.executionStatus ?? 'pending');
-      const marketMatch = signal.market === venueMode;
+      const marketMatch = venueMode === 'both' || signal.market === venueMode;
       return inRange && accepted && marketMatch;
     });
   }, [activePortfolioTradeRows, autoMode, portfolioTradesRangeEnd, portfolioTradesRangeStart, signals, venueMode]);
@@ -2957,7 +2966,7 @@ function AutoTradePage({
       : signals.filter(signal => {
         const stamp = signalTimestamp(signal);
         const inRange = stamp >= portfolioTradesRangeStart && stamp <= portfolioTradesRangeEnd;
-        const marketMatch = signal.market === venueMode;
+        const marketMatch = venueMode === 'both' || signal.market === venueMode;
         return inRange && marketMatch;
       });
     return {
@@ -3271,7 +3280,7 @@ function AutoTradePage({
     if (portalView !== 'user' && portalView !== 'admin') return;
     api<{ ok: boolean; rules: LiveRulesPayload }>('/api/live-rules')
       .then(({ rules }) => {
-        setVenueMode(rules.venueMode === 'futures' ? 'futures' : 'spot');
+        setVenueMode(rules.venueMode === 'futures' || rules.venueMode === 'both' ? rules.venueMode : 'spot');
         setLiveExecutionMode(rules.executionMode === 'live' ? 'live' : 'test');
         setLiveKillSwitch(Boolean(rules.killSwitch));
         setLiveRuleToggles({ ...defaultLiveRuleToggles, ...(rules.ruleToggles ?? {}) });
@@ -3394,7 +3403,7 @@ function AutoTradePage({
   }, [allowedDirection, venueMode]);
 
   useEffect(() => {
-    setPortfolioTradesMarketFilter(venueMode);
+    setPortfolioTradesMarketFilter(venueMode === 'both' ? 'all' : venueMode);
     setPortfolioTradesSideFilter(current => {
       if (venueMode === 'spot') return current === 'short' ? 'all' : current;
       if (allowedDirection === 'long-only') return current === 'short' ? 'all' : current;
@@ -4178,10 +4187,10 @@ function AutoTradePage({
             <button type="button" className="live-rules-toggle" onClick={() => setLiveRulesOpen(value => !value)} aria-expanded={liveRulesOpen}>
               <div className="live-rules-toggle-main">
                 <strong>Live Auto Rules</strong>
-                <span>{venueMode === 'futures' ? `${allowedDirection === 'both' ? 'Both' : allowedDirection === 'long-only' ? 'Long' : 'Short'} | ${leverageValue}x | ${futuresMarginMode}` : 'Spot | Long only'} | {openTradeLimitUnlimited ? 'Unlimited' : `${Math.max(1, Number(customOpenTradeLimit) || 6)} max`} | {liveExecutionMode.toUpperCase()}</span>
+                <span>{venueMode === 'both' ? `Both | ${allowedDirection === 'both' ? 'Long+Short' : allowedDirection === 'long-only' ? 'Long' : 'Short'} | ${leverageValue}x` : venueMode === 'futures' ? `${allowedDirection === 'both' ? 'Both' : allowedDirection === 'long-only' ? 'Long' : 'Short'} | ${leverageValue}x | ${futuresMarginMode}` : 'Spot | Long only'} | {openTradeLimitUnlimited ? 'Unlimited' : `${Math.max(1, Number(customOpenTradeLimit) || 6)} max`} | {liveExecutionMode.toUpperCase()}</span>
               </div>
               <div className="live-rules-badge-row">
-                <span className="nav-badge subtle">{venueMode === 'spot' ? 'Spot' : 'Futures'}</span>
+                <span className="nav-badge subtle">{venueMode === 'both' ? 'Both' : venueMode === 'spot' ? 'Spot' : 'Futures'}</span>
                 <span className={`nav-badge ${liveExecutionMode === 'live' ? 'glow' : 'subtle'}`}>{liveExecutionMode === 'live' ? 'Live' : 'Test'}</span>
                 {liveKillSwitch && <span className="nav-badge subtle">Kill Switch</span>}
                 {liveRulesOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
@@ -4206,11 +4215,22 @@ function AutoTradePage({
                     >
                       Futures
                     </button>
+                    <button
+                      type="button"
+                      className={venueMode === 'both' ? 'active' : ''}
+                      onClick={() => {
+                        setVenueMode('both');
+                        if (allowedDirection === 'long-only') setAllowedDirection('both');
+                      }}
+                    >
+                      Both
+                    </button>
                   </div>
                   {venueMode === 'spot' && <small className="selection-footnote">Spot execution accepts long-only buy orders.</small>}
+                  {venueMode === 'both' && <small className="selection-footnote">Spot LONG buys and Futures signals can pass together.</small>}
                 </div>
               </div>
-              {venueMode === 'futures' && <div className="selection-control-card live-rules-panel-card live-futures-direction-card">
+              {venueMode !== 'spot' && <div className="selection-control-card live-rules-panel-card live-futures-direction-card">
                 <span className="field-label-inline"><FieldHint label="Futures Direction" hint="Choose which futures signals are allowed to become real Binance orders." /><small className="field-priority">Futures</small></span>
                 <div className="selection-pill-row">
                   {([
@@ -4249,13 +4269,29 @@ function AutoTradePage({
                     {label}
                   </button>)}
                 </div>
+                {venueMode === 'spot' && <button
+                  type="button"
+                  className="danger-action-button"
+                  onClick={() => closeAllVenuePositions('spot')}
+                  disabled={portalView !== 'admin' || !binanceConnection.connected}
+                >
+                  Close All Spot
+                </button>}
                 {venueMode === 'futures' && <button
                   type="button"
                   className="danger-action-button"
-                  onClick={closeAllFuturesPositions}
+                  onClick={() => closeAllVenuePositions('futures')}
                   disabled={portalView !== 'admin' || !binanceConnection.connected}
                 >
                   Close All Futures
+                </button>}
+                {venueMode === 'both' && <button
+                  type="button"
+                  className="danger-action-button"
+                  onClick={() => closeAllVenuePositions('both')}
+                  disabled={portalView !== 'admin' || !binanceConnection.connected}
+                >
+                  Close All Spot + Futures
                 </button>}
               </div>
               <div className="selection-control-card live-rules-panel-card">
@@ -4322,7 +4358,7 @@ function AutoTradePage({
                   <button type="button" className="active" disabled>Equal Split</button>
                 </div>
               </div>
-              {venueMode === 'futures' && <div className="selection-control-card live-rules-panel-card live-rule-wide live-futures-rule-card">
+              {venueMode !== 'spot' && <div className="selection-control-card live-rules-panel-card live-rule-wide live-futures-rule-card">
                 <span className="field-label-inline"><FieldHint label="Futures Handling" hint="Set leverage and margin behavior for futures execution." /><small className="field-priority">Futures</small></span>
                 <div className="live-futures-settings live-futures-settings-advanced">
                   <div
@@ -4383,8 +4419,8 @@ function AutoTradePage({
             </div>
             <div className="binance-wallet-hero">
               <article className="primary">
-                <span>{venueMode === 'spot' ? 'Spot Total' : 'Futures Total'}</span>
-                <strong>{`${fmtMoney(venueMode === 'spot' ? binanceWallet.totalValueUsdt : binanceWallet.futuresTotalUsdt)} USDT`}</strong>
+                <span>{venueMode === 'both' ? 'Spot + Futures Total' : venueMode === 'spot' ? 'Spot Total' : 'Futures Total'}</span>
+                <strong>{`${fmtMoney(liveCapitalValue)} USDT`}</strong>
               </article>
               <article>
                 <span>Wallet Total</span>
@@ -4484,10 +4520,10 @@ function AutoTradePage({
                   <strong><b className="good">{effectivePortfolioStats.longCount}</b> / <b className="bad">{effectivePortfolioStats.shortCount}</b></strong>
                   <small>{portfolioTradesSideFilter === 'all' ? 'Showing both sides' : portfolioTradesSideFilter === 'long' ? 'LONG filter active' : 'SHORT filter active'}</small>
                 </button>
-                <button type="button" className="trade-extreme-card locked" onClick={() => setPortfolioTradesMarketFilter(venueMode)}>
+                <button type="button" className="trade-extreme-card locked" onClick={() => setPortfolioTradesMarketFilter(venueMode === 'both' ? 'all' : venueMode)}>
                   <span>Spot / Futures</span>
                   <strong><b>{effectivePortfolioStats.spotCount}</b> / <b>{effectivePortfolioStats.futuresCount}</b></strong>
-                  <small>{venueMode === 'spot' ? 'Auto Trading is locked to Spot execution' : `Auto Trading is locked to Futures ${allowedDirection === 'both' ? 'both sides' : allowedDirection === 'long-only' ? 'long only' : 'short only'}`}</small>
+                  <small>{venueMode === 'both' ? 'Auto Trading accepts Spot and Futures together' : venueMode === 'spot' ? 'Auto Trading is locked to Spot execution' : `Auto Trading is locked to Futures ${allowedDirection === 'both' ? 'both sides' : allowedDirection === 'long-only' ? 'long only' : 'short only'}`}</small>
                 </button>
               </div>
             </div>
@@ -5623,7 +5659,7 @@ function simulatePortfolioReplay(
   tickers: Map<string, Ticker>,
   futuresTickers: Map<string, Ticker>,
   rules: ShadowRuleProfile,
-  venueMode: MarketMode
+  venueMode: ExecutionVenueMode
 ): ReplayResult {
   if (!rules.enabled) {
     return {
@@ -5671,7 +5707,7 @@ function simulatePortfolioReplay(
     ? futuresTickers.get(signal.symbol)?.price
     : tickers.get(signal.symbol)?.price;
   const sortedSignals = signals
-    .filter(signal => signal.openedAt >= replayStart && signal.openedAt <= replayEnd && signal.market === venueMode)
+    .filter(signal => signal.openedAt >= replayStart && signal.openedAt <= replayEnd && (venueMode === 'both' || signal.market === venueMode))
     .sort((a, b) => a.openedAt - b.openedAt || a.id - b.id);
   const rankedStrategyIds = Array.from(sortedSignals.reduce((map, signal) => {
     const marketPrice = marketPriceFor(signal);
@@ -5726,7 +5762,7 @@ function simulatePortfolioReplay(
       if (rules.allowedDirection === 'short-only' && signal.side !== 'SHORT') {
         failedRules.push('Allowed Direction');
       }
-      if (venueMode === 'spot' && signal.side !== 'LONG') {
+      if (signal.market === 'spot' && signal.side !== 'LONG') {
         failedRules.push('Allowed Direction');
       }
       if (activePositions.some(position => position.symbol === signal.symbol)) {
