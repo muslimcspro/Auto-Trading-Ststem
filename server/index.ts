@@ -20,6 +20,7 @@ type SymbolInfo = {
   baseAsset: string;
   quoteAsset: string;
   status: string;
+  contractType?: string;
   minNotional?: number;
   minQty?: number;
   stepSize?: number;
@@ -2127,6 +2128,9 @@ function rememberBrokerRiskControl(symbol: string, message: string) {
   if (lower.includes('position risk control') || lower.includes('reduce-only')) {
     futuresRiskControlCooldown.set(symbol, Date.now() + 6 * 60 * 60 * 1000);
   }
+  if (lower.includes('market is closed')) {
+    symbolPauseUntil.set(symbol, Date.now() + 6 * 60 * 60_000);
+  }
 }
 
 async function evaluateExecutionCandidate(signal: TradeSignal) {
@@ -2160,6 +2164,9 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
   const rewardMultiple = signal.riskPct > 0 ? signal.expectedProfitPct / signal.riskPct : Infinity;
   if (rules.ruleToggles.minRiskReward && rewardMultiple < getRiskRewardMultiplier(rules.minRiskReward, rules.customRiskReward)) failedRules.push('Minimum Risk/Reward');
   const symbolRules = getSymbolRules(signal.symbol, signal.market);
+  if (!symbolRules || symbolRules.status !== 'TRADING') {
+    failedRules.push(signal.market === 'spot' ? 'Spot symbol is not tradable on Binance.' : 'Futures symbol is not tradable on Binance.');
+  }
   let wallet: BinanceWalletSummary = { ok: false, connected: false, updatedAt: null, assetCount: 0, totalValueUsdt: 0, futuresTotalUsdt: 0, futuresAvailableUsdt: 0, pnl24hUsdt: 0, pnl24hPct: 0, balances: [] };
   let capital = 0;
   let availableCapital = 0;
@@ -4167,12 +4174,21 @@ async function loadSymbols() {
   const response = await fetch(`${BINANCE_REST}/api/v3/exchangeInfo`);
   const data = await response.json() as {
     symbols: (SymbolInfo & {
+      isSpotTradingAllowed?: boolean;
+      quoteOrderQtyMarketAllowed?: boolean;
+      orderTypes?: string[];
       quantityPrecision?: number;
       filters?: { filterType?: string; minNotional?: string; notional?: string; minQty?: string; stepSize?: string }[];
     })[];
   };
   symbols = data.symbols
-    .filter(s => s.status === 'TRADING')
+    .filter(symbol =>
+      symbol.status === 'TRADING'
+      && symbol.quoteAsset === 'USDT'
+      && symbol.isSpotTradingAllowed !== false
+      && symbol.quoteOrderQtyMarketAllowed !== false
+      && (!Array.isArray(symbol.orderTypes) || symbol.orderTypes.includes('MARKET'))
+    )
     .map(symbol => {
       const notionalFilter = symbol.filters?.find(filter => filter.filterType === 'NOTIONAL' || filter.filterType === 'MIN_NOTIONAL');
       const lotSizeFilter = symbol.filters?.find(filter => filter.filterType === 'LOT_SIZE');
@@ -4196,12 +4212,18 @@ async function loadFuturesSymbols() {
   const data = await response.json() as {
     symbols: (SymbolInfo & {
       contractType?: string;
+      orderTypes?: string[];
       quantityPrecision?: number;
       filters?: { filterType?: string; minNotional?: string; notional?: string; minQty?: string; stepSize?: string }[];
     })[];
   };
   futuresSymbols = data.symbols
-    .filter(symbol => symbol.status === 'TRADING' && symbol.quoteAsset === 'USDT')
+    .filter(symbol =>
+      symbol.status === 'TRADING'
+      && symbol.quoteAsset === 'USDT'
+      && (!symbol.contractType || symbol.contractType === 'PERPETUAL')
+      && (!Array.isArray(symbol.orderTypes) || symbol.orderTypes.includes('MARKET'))
+    )
     .map(symbol => {
       const notionalFilter = symbol.filters?.find(filter => filter.filterType === 'NOTIONAL' || filter.filterType === 'MIN_NOTIONAL');
       const lotSizeFilter = symbol.filters?.find(filter => filter.filterType === 'MARKET_LOT_SIZE')
@@ -4211,6 +4233,7 @@ async function loadFuturesSymbols() {
         baseAsset: symbol.baseAsset,
         quoteAsset: symbol.quoteAsset,
         status: symbol.status,
+        contractType: symbol.contractType,
         minNotional: Number(notionalFilter?.minNotional ?? notionalFilter?.notional ?? 0) || undefined,
         minQty: Number(lotSizeFilter?.minQty ?? 0) || undefined,
         stepSize: Number(lotSizeFilter?.stepSize ?? 0) || undefined,
@@ -4640,7 +4663,7 @@ async function scanMarket() {
         console.log('[scan] spot long gate blocked: BTC/ETH 1h trend is not above EMA21/EMA50');
         return;
       }
-      const universe = getRotatingScanUniverse(source);
+      const universe = getRotatingScanUniverse(source, market);
       for (const timeframe of selectedTimeframes) {
         if (version !== scanVersion || selectedStrategies.size === 0) return;
         const { batch, nextCursor } = getScanBatch(universe, scanCursors[market][timeframe], SCAN_BATCH_SIZE[timeframe]);
@@ -4717,9 +4740,10 @@ async function scanMarket() {
   }
 }
 
-function getRotatingScanUniverse(source: Map<string, PriceTicker>) {
+function getRotatingScanUniverse(source: Map<string, PriceTicker>, market: TradingVenue) {
+  const tradableSymbols = new Set((market === 'futures' ? futuresSymbols : symbols).map(symbol => symbol.symbol));
   return [...source.values()]
-    .filter(ticker => ticker.symbol.endsWith('USDT'))
+    .filter(ticker => ticker.symbol.endsWith('USDT') && tradableSymbols.has(ticker.symbol))
     .sort((left, right) => right.quoteVolume - left.quoteVolume || left.symbol.localeCompare(right.symbol));
 }
 
