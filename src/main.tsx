@@ -1262,7 +1262,6 @@ function HomePage({
   openSymbolChart: (symbol: string, market: MarketMode) => void;
 }) {
   const [leaderMarketMode, setLeaderMarketMode] = useState<MarketMode>('spot');
-  const liveCrypto = (marketMode === 'spot' ? spotTop : futuresTop).slice(0, 4);
   const monitoredCount = marketMode === 'spot' ? dashboard.monitoredSpot : dashboard.monitoredFutures;
   const availableCount = marketMode === 'spot' ? dashboard.availableSpot : dashboard.availableFutures;
   const activeLeaders = leaderMarketMode === 'spot'
@@ -1295,61 +1294,6 @@ function HomePage({
             </span>
           </a>
         </div>
-      </div>
-      <div className="home-launchpad-side">
-        <div className="home-live-pulse">
-          <span className="nav-badge glow">LIVE</span>
-          <strong>Crypto</strong>
-          <small>{dashboard.liveSignals} live trades</small>
-        </div>
-        <div className="home-market-grid">
-          <article className="market-card active">
-            <span>Crypto</span>
-            <strong>LIVE</strong>
-            <small>Binance</small>
-          </article>
-          <article className="market-card">
-            <span>US Market</span>
-            <strong>SOON</strong>
-            <small>Equities</small>
-          </article>
-          <article className="market-card">
-            <span>Saudi Market</span>
-            <strong>SOON</strong>
-            <small>Tadawul</small>
-          </article>
-          <article className="market-card">
-            <span>Forex</span>
-            <strong>SOON</strong>
-            <small>FX</small>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section className="home-live-board">
-      <div className="home-live-board-head">
-        <div>
-          <span className="eyebrow">Live crypto pulse</span>
-          <h2>Public market board</h2>
-        </div>
-        <div className="home-market-switch">
-          <button type="button" className={marketMode === 'spot' ? 'active' : ''} onClick={() => setMarketMode('spot')}>Spot</button>
-          <button type="button" className={marketMode === 'futures' ? 'active' : ''} onClick={() => setMarketMode('futures')}>Futures</button>
-        </div>
-      </div>
-      <div className="home-live-grid">
-        {liveCrypto.map(item => <article key={item.symbol} className="home-live-card" onClick={() => openSymbolChart(item.symbol, marketMode)} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') openSymbolChart(item.symbol, marketMode); }}>
-          <div className="home-live-card-top">
-            <span>{item.symbol.replace('USDT', '')}</span>
-            <small>{new Date(item.eventTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</small>
-          </div>
-          <strong>${fmt(item.price)}</strong>
-          <div className="home-live-card-bottom">
-            <b className={item.change24h >= 0 ? 'good' : 'bad'}>{item.change24h.toFixed(2)}%</b>
-            <small>{item.quoteVolume >= 1_000_000 ? `$${(item.quoteVolume / 1_000_000).toFixed(1)}M volume` : `$${Math.round(item.quoteVolume / 1000)}K volume`}</small>
-          </div>
-        </article>)}
       </div>
     </section>
 
@@ -1878,7 +1822,7 @@ function AutoTradePage({
   const [portfolioTradesScoreFilter, setPortfolioTradesScoreFilter] = useState<ScoreFilter>('all');
   const [portfolioTradeQuery, setPortfolioTradeQuery] = useState('');
   const [portfolioRejectedTradeQuery, setPortfolioRejectedTradeQuery] = useState('');
-  const [portfolioAcceptedKind, setPortfolioAcceptedKind] = useState<'all' | 'test' | 'live'>('all');
+  const [portfolioWalletVenueFilter, setPortfolioWalletVenueFilter] = useState<'all' | 'spot' | 'futures'>('all');
   const [portfolioRejectedKind, setPortfolioRejectedKind] = useState<'all' | 'test' | 'live'>('all');
   const [chartTrade, setChartTrade] = useState<TradeChartTrade | null>(null);
   const [livePortfolioSummary, setLivePortfolioSummary] = useState<LivePortfolioSummaryResponse | null>(null);
@@ -1891,7 +1835,7 @@ function AutoTradePage({
   const liveRulesAutoSaveTimerRef = useRef<number | null>(null);
   const lastAutoSavedRulesKeyRef = useRef('');
   const [adminPersonalOpen, setAdminPersonalOpen] = useState(false);
-  const [hideSmallBinanceAssets, setHideSmallBinanceAssets] = useState(() => readAutoTradeSetting('autoTrade.hideSmallBinanceAssets', 'false') === 'true');
+  const [hideSmallBinanceAssets, setHideSmallBinanceAssets] = useState(() => readAutoTradeSetting('autoTrade.hideSmallBinanceAssets', 'true') !== 'false');
   const [focusedPortfolioTradeId, setFocusedPortfolioTradeId] = useState<number | null>(null);
   const [portfolioTradesRange, setPortfolioTradesRange] = useState<PerformanceRange>('24h');
   const [portfolioTradesCustomFrom, setPortfolioTradesCustomFrom] = useState(() => toDateInput(Date.now() - 29 * 24 * 60 * 60 * 1000));
@@ -2032,7 +1976,7 @@ function AutoTradePage({
   const activeName = portalView === 'admin' ? adminUsername : memberName;
   const adminPasswordProtected = sessionUser?.role === 'admin';
   useEffect(() => {
-  }, [portfolioTradesRange, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesStatusFilter, portfolioTradesSideFilter, portfolioTradesMarketFilter, portfolioTradesTimeframeFilter, portfolioTradesExecutionProfileFilter, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioAcceptedKind, portfolioRejectedKind, autoMode]);
+  }, [portfolioTradesRange, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesStatusFilter, portfolioTradesSideFilter, portfolioTradesMarketFilter, portfolioTradesTimeframeFilter, portfolioTradesExecutionProfileFilter, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioRejectedKind, autoMode]);
   const greetingLine = useMemo(() => {
     const hour = new Date().getHours();
     const moment = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
@@ -2432,7 +2376,7 @@ function AutoTradePage({
       timeframe: portfolioTradesTimeframeFilter,
       mode: portfolioTradesExecutionProfileFilter,
       score: portfolioTradesScoreFilter,
-      acceptedKind: portfolioAcceptedKind,
+      acceptedKind: 'all',
       rejectedKind: portfolioRejectedKind,
       acceptedQuery: portfolioTradeQuery,
       rejectedQuery: portfolioRejectedTradeQuery
@@ -2495,7 +2439,7 @@ function AutoTradePage({
       if (ledgerRefreshTimeout) window.clearTimeout(ledgerRefreshTimeout);
       window.clearInterval(ledgerRefresh);
     };
-  }, [autoMode, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioAcceptedKind, portfolioRejectedKind, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesExecutionProfileFilter, portfolioTradesRange, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter, venueMode]);
+  }, [autoMode, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioRejectedKind, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesExecutionProfileFilter, portfolioTradesRange, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter, venueMode]);
 
   const confirmLiveExecutionMode = () => {
     setLiveExecutionMode('live');
@@ -2550,6 +2494,21 @@ function AutoTradePage({
   const visibleBinanceBalances = useMemo(
     () => hideSmallBinanceAssets ? binanceWallet.balances.filter(balance => balance.valueUsdt >= 1) : binanceWallet.balances,
     [binanceWallet.balances, hideSmallBinanceAssets]
+  );
+  const visibleBinanceWalletPanels = useMemo(
+    () => ([
+      {
+        id: 'spot' as const,
+        label: 'Spot Total',
+        value: binanceWallet.totalValueUsdt
+      },
+      {
+        id: 'futures' as const,
+        label: 'Futures Total',
+        value: binanceWallet.futuresTotalUsdt
+      }
+    ]).filter(panel => portfolioWalletVenueFilter === 'all' || panel.id === portfolioWalletVenueFilter),
+    [binanceWallet.futuresTotalUsdt, binanceWallet.totalValueUsdt, portfolioWalletVenueFilter]
   );
   const hiddenBinanceBalanceCount = binanceWallet.balances.length - visibleBinanceBalances.length;
   const leverageValue = Math.max(1, Math.min(20, Number(futuresLeverage) || 1));
@@ -3047,7 +3006,6 @@ function AutoTradePage({
     setPortfolioTradesMarketFilter('all');
     setPortfolioTradesTimeframeFilter('all');
     setPortfolioTradesExecutionProfileFilter('all');
-    setPortfolioAcceptedKind('all');
     setPortfolioTradeQuery('');
     handledFocusedPortfolioTradeIdRef.current = null;
     setFocusedPortfolioTradeId(tradeId);
@@ -4400,6 +4358,20 @@ function AutoTradePage({
                 <span>{binanceWallet.updatedAt ? `Updated ${entryTime(binanceWallet.updatedAt)}` : 'Reading required'}</span>
               </div>
               <div className="binance-wallet-head-actions">
+                <div className="portfolio-kind-menu binance-wallet-venue-menu">
+                  {([
+                    ['all', 'Both'],
+                    ['spot', 'Spot'],
+                    ['futures', 'Futures']
+                  ] as const).map(([market, label]) => <button
+                    key={market}
+                    type="button"
+                    className={portfolioWalletVenueFilter === market ? 'active' : ''}
+                    onClick={() => setPortfolioWalletVenueFilter(market)}
+                  >
+                    {label}
+                  </button>)}
+                </div>
                 <button
                   type="button"
                   className={`binance-wallet-filter ${hideSmallBinanceAssets ? 'active' : ''}`}
@@ -4410,10 +4382,10 @@ function AutoTradePage({
               </div>
             </div>
             <div className="binance-wallet-hero">
-              <article className="primary">
-                <span>{venueMode === 'both' ? 'Spot + Futures Total' : venueMode === 'spot' ? 'Spot Total' : 'Futures Total'}</span>
-                <strong>{`${fmtMoney(liveCapitalValue)} USDT`}</strong>
-              </article>
+              {visibleBinanceWalletPanels.map((panel, index) => <article key={panel.id} className={index === 0 ? 'primary' : ''}>
+                <span>{panel.label}</span>
+                <strong>{`${fmtMoney(panel.value)} USDT`}</strong>
+              </article>)}
               <article>
                 <span>Wallet Total</span>
                 <strong>{`${fmtMoney(binanceWallet.totalValueUsdt)} USDT`}</strong>
@@ -4561,14 +4533,14 @@ function AutoTradePage({
                   <strong className="portfolio-ledger-title">{autoMode === 'shadow' ? 'Accepted Shadow Trades' : 'Accepted Portfolio Trades'}</strong>
                   <div className="portfolio-kind-menu">
                     {([
-                      ['all', 'All Accepted'],
-                      ['test', 'Test Accepted'],
-                      ['live', 'Live Accepted']
-                    ] as const).map(([kind, label]) => <button
-                      key={kind}
+                      ['all', 'Both'],
+                      ['spot', 'Spot'],
+                      ['futures', 'Futures']
+                    ] as const).map(([market, label]) => <button
+                      key={market}
                       type="button"
-                      className={portfolioAcceptedKind === kind ? 'active' : ''}
-                      onClick={() => setPortfolioAcceptedKind(kind)}
+                      className={portfolioTradesMarketFilter === market ? 'active' : ''}
+                      onClick={() => setPortfolioTradesMarketFilter(market)}
                     >
                       {label}
                     </button>)}

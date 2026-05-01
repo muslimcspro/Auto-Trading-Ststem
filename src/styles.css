@@ -458,6 +458,17 @@ button, input { font: inherit; }
     linear-gradient(135deg, color-mix(in srgb, var(--panel-soft) 76%, transparent), color-mix(in srgb, var(--panel-strong) 98%, black));
   box-shadow: 0 34px 90px rgba(0, 0, 0, .26);
 }
+
+.home-launchpad:has(.home-launchpad-copy:only-child) {
+  grid-template-columns: 1fr;
+}
+
+.home-launchpad:has(.home-launchpad-copy:only-child) .home-launchpad-copy {
+  text-align: center;
+  align-items: center;
+  max-width: 900px;
+  margin: 0 auto;
+}
 .home-launchpad-copy {
   display: grid;
   gap: 18px;
