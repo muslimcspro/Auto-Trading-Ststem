@@ -1678,11 +1678,15 @@ function decimalPlacesFromStep(stepSize?: number, quantityPrecision?: number) {
   return Math.max(0, Math.min(12, decimals));
 }
 
-function formatBinanceQuantity(quantity: number, rules: SymbolInfo | null) {
+function formatBinanceQuantity(quantity: number, rules: SymbolInfo | null, rounding: 'floor' | 'ceil' = 'floor') {
   const stepSize = rules?.stepSize && rules.stepSize > 0 ? rules.stepSize : 0.001;
   const minQty = rules?.minQty && rules.minQty > 0 ? rules.minQty : stepSize;
   const precision = decimalPlacesFromStep(stepSize, rules?.quantityPrecision);
-  const steppedQuantity = Math.floor((quantity + Number.EPSILON) / stepSize) * stepSize;
+  const normalizedInput = Math.max(quantity, minQty);
+  const stepCount = rounding === 'ceil'
+    ? Math.ceil((normalizedInput - Number.EPSILON) / stepSize)
+    : Math.floor((normalizedInput + Number.EPSILON) / stepSize);
+  const steppedQuantity = stepCount * stepSize;
   const normalizedQuantity = Number(steppedQuantity.toFixed(precision));
   if (!Number.isFinite(normalizedQuantity) || normalizedQuantity <= 0) {
     throw new Error('Calculated Binance quantity is invalid.');
@@ -1724,7 +1728,10 @@ function isHiddenExecutionFailure(notes?: string[]) {
 function buildFuturesOrderQuantity(signal: TradeSignal, orderNotional: number) {
   const rules = getSymbolRules(signal.symbol, 'futures');
   const rawQuantity = Math.max(0, orderNotional / Math.max(signal.entry, 0.00000001));
-  const normalized = formatBinanceQuantity(rawQuantity, rules);
+  let normalized = formatBinanceQuantity(rawQuantity, rules);
+  if (rules?.minNotional && normalized.quantity * signal.entry < rules.minNotional) {
+    normalized = formatBinanceQuantity(rules.minNotional / Math.max(signal.entry, 0.00000001), rules, 'ceil');
+  }
   if (rules?.minNotional && normalized.quantity * signal.entry < rules.minNotional) {
     throw new Error(`Binance Min Notional ${rules.minNotional.toFixed(2)} USDT`);
   }
@@ -2228,6 +2235,8 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
   const rules = liveExecutionRules;
   const isTestMode = rules.executionMode === 'test';
   const failedRules: string[] = [];
+  const symbolRules = getSymbolRules(signal.symbol, signal.market);
+  const exchangeMinNotional = symbolRules?.minNotional ?? (signal.market === 'futures' ? 5 : 5);
   const riskControlUntil = futuresRiskControlCooldown.get(signal.symbol) ?? 0;
   if (signal.market === 'futures' && riskControlUntil > Date.now()) failedRules.push('Binance Symbol Risk Control');
   if (riskControlUntil && riskControlUntil <= Date.now()) futuresRiskControlCooldown.delete(signal.symbol);
@@ -2254,7 +2263,6 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
   if (rules.ruleToggles.openTradeLimit && !unlimitedOpenTrades && openSignals.length >= rules.maxTrades) failedRules.push('Open Trade Limit');
   const rewardMultiple = signal.riskPct > 0 ? signal.expectedProfitPct / signal.riskPct : Infinity;
   if (rules.ruleToggles.minRiskReward && rewardMultiple < getRiskRewardMultiplier(rules.minRiskReward, rules.customRiskReward)) failedRules.push('Minimum Risk/Reward');
-  const symbolRules = getSymbolRules(signal.symbol, signal.market);
   if (!symbolRules || symbolRules.status !== 'TRADING') {
     failedRules.push(signal.market === 'spot' ? 'Spot symbol is not tradable on Binance.' : 'Futures symbol is not tradable on Binance.');
   }
@@ -2271,25 +2279,27 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
       ? wallet.totalValueUsdt
       : wallet.futuresAvailableUsdt * leverage;
     capital = signal.market === 'spot' ? wallet.totalValueUsdt : wallet.futuresTotalUsdt;
-    availableCapital = Math.max(0, executableCapital * (1 - rules.reserveRatio / 100) * 0.96);
+    availableCapital = Math.max(0, executableCapital);
     if (rules.ruleToggles.cashReserve && availableCapital <= 0) failedRules.push('Cash Reserve %');
-    const liveSlotCount = unlimitedOpenTrades
-      ? Math.max(1, openSignals.length + 1)
-      : Math.max(1, rules.maxTrades - openSignals.length);
+    const affordableSlots = Math.max(0, Math.floor(availableCapital / exchangeMinNotional));
+    const configuredSlots = unlimitedOpenTrades ? affordableSlots : Math.min(rules.maxTrades, affordableSlots);
+    const effectiveMaxTrades = Math.max(0, configuredSlots);
+    if (rules.ruleToggles.openTradeLimit && affordableSlots <= openSignals.length) failedRules.push('Open Trade Limit');
+    const liveSlotCount = Math.max(1, effectiveMaxTrades - openSignals.length);
     const riskSizedNotional = signal.riskPct > 0 ? (capital * (rules.riskPerTrade / 100)) / (signal.riskPct / 100) : availableCapital / liveSlotCount;
     const slotNotional = availableCapital / liveSlotCount;
     orderNotional = Math.max(0, Math.min(availableCapital, rules.allocationMethod === 'equal' ? slotNotional : riskSizedNotional));
     if (rules.ruleToggles.riskPerTrade && !(orderNotional > 0)) failedRules.push('Risk Per Trade %');
   }
   if (isTestMode) {
-    const exchangeFloor = (symbolRules?.minNotional ?? (signal.market === 'futures' ? 10 : 5)) * 1.002;
+    const exchangeFloor = exchangeMinNotional;
     const quantityFloor = signal.market === 'futures'
       ? Math.max(signal.entry * Math.max(symbolRules?.minQty ?? 0.001, 0.001), exchangeFloor)
       : exchangeFloor;
     orderNotional = Math.max(orderNotional, quantityFloor);
   }
   if (!isTestMode && symbolRules?.minNotional && orderNotional < symbolRules.minNotional) {
-    const notionalFloor = symbolRules.minNotional * 1.002;
+    const notionalFloor = symbolRules.minNotional;
     if (availableCapital >= notionalFloor) {
       orderNotional = notionalFloor;
     } else {
@@ -6208,9 +6218,10 @@ app.post('/api/live-rules', requireAdmin, (req, res) => {
 });
 app.post('/api/dashboard/reset', requireAdmin, (_req, res) => {
   scanVersion++;
-  signals.splice(0, signals.length);
+  const preservedPortfolioLinks = signals.filter(signal => signal.executionStatus === 'live_accepted');
+  signals.splice(0, signals.length, ...preservedPortfolioLinks);
   notifications.splice(0, notifications.length);
-  nextSignalId = 1;
+  nextSignalId = Math.max(1, ...signals.map(signal => signal.id + 1));
   invalidateComputedCaches();
   saveState();
   broadcast('dashboard', getDashboardPayload());

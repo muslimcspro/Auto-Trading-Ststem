@@ -2450,7 +2450,7 @@ function AutoTradePage({
       if (ledgerRefreshTimeout) window.clearTimeout(ledgerRefreshTimeout);
       window.clearInterval(ledgerRefresh);
     };
-  }, [autoMode, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioRejectedKind, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesExecutionProfileFilter, portfolioTradesRange, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter, venueMode]);
+  }, [autoMode, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioRejectedKind, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesExecutionProfileFilter, portfolioTradesMarketFilter, portfolioTradesRange, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter, venueMode]);
 
   const confirmLiveExecutionMode = () => {
     setLiveExecutionMode('live');
@@ -4522,6 +4522,7 @@ function AutoTradePage({
               scoreFilter={portfolioTradesScoreFilter}
               setStatusFilter={setPortfolioTradesStatusFilter}
               setSideFilter={setPortfolioTradesSideFilter}
+              setMarketFilter={setPortfolioTradesMarketFilter}
               setTimeframeFilter={setPortfolioTradesTimeframeFilter}
               setExecutionProfileFilter={setPortfolioTradesExecutionProfileFilter}
               setScoreFilter={setPortfolioTradesScoreFilter}
