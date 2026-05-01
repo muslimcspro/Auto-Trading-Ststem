@@ -1017,6 +1017,46 @@ type BinanceFuturesTrade = {
   time?: number;
 };
 
+type BinanceOpenOrder = {
+  symbol?: string;
+  orderId?: number | string;
+  side?: string;
+  type?: string;
+  status?: string;
+  positionSide?: string;
+  origQty?: string;
+  executedQty?: string;
+  price?: string;
+  stopPrice?: string;
+  updateTime?: number;
+  time?: number;
+};
+
+type BinanceIncomeRow = {
+  symbol?: string;
+  incomeType?: string;
+  income?: string;
+  asset?: string;
+  time?: number;
+  tranId?: number | string;
+  tradeId?: number | string;
+  info?: string;
+};
+
+type BinanceSpotTrade = {
+  symbol?: string;
+  id?: number | string;
+  orderId?: number | string;
+  price?: string;
+  qty?: string;
+  quoteQty?: string;
+  commission?: string;
+  commissionAsset?: string;
+  time?: number;
+  isBuyer?: boolean;
+  isMaker?: boolean;
+};
+
 const emptyBinanceScopes = (): BinanceConnectionScopes => ({
   reading: false,
   spot: false,
@@ -3428,6 +3468,452 @@ function scoreMatchesFilter(signal: TradeSignal, filter: string) {
   return filter === 'all' || scoreToneFromReason(signal.reason) === filter;
 }
 
+type BinanceLivePortfolioFilters = {
+  rangeStart: number;
+  rangeEnd: number;
+  statusFilter: string;
+  sideFilter: string;
+  marketFilter: string;
+  timeframeFilter: string;
+  modeFilter: string;
+  scoreFilter: string;
+  acceptedKind: string;
+  rejectedKind: string;
+  acceptedQuery: string;
+  rejectedQuery: string;
+};
+
+type BinancePortfolioLedgerRow = {
+  id: number;
+  label: string;
+  symbol: string;
+  strategyName: string;
+  status: 'OPEN' | 'WIN' | 'LOSS';
+  executionStatus: TradeSignal['executionStatus'];
+  executionLeverage: number | null;
+  executionMarginMode: 'isolated' | 'cross' | null;
+  side: Side;
+  market: TradingVenue;
+  venueLabel: string;
+  exitMode: ExitMode;
+  timeframe: Timeframe;
+  openedAt: number;
+  closedAt: number | null;
+  entry: number;
+  marketPrice: number | null;
+  liquidationPrice: number | null;
+  expectedProfitPct: number;
+  riskPct: number;
+  pnl: number;
+  pnlUsdt: number | null;
+  roiPct: number | null;
+  pnlSource: string | null;
+  pnlReadAt: number | null;
+  pnlLabel: string;
+  score: number | null;
+  failedRules: string[];
+  allocationAmount: number;
+  allocationPct: number;
+};
+
+function portfolioSignalCandidates(symbol: string, market: TradingVenue, side?: Side) {
+  return signals
+    .filter(signal =>
+      signal.symbol === symbol
+      && signal.market === market
+      && (!side || signal.side === side)
+      && countsAsOpenExecution(signal.executionStatus)
+    )
+    .sort((a, b) => b.openedAt - a.openedAt);
+}
+
+function bestLinkedSignal(symbol: string, market: TradingVenue, side?: Side, eventTime = Date.now()) {
+  const candidates = portfolioSignalCandidates(symbol, market, side);
+  return candidates.find(signal => signal.openedAt <= eventTime) ?? candidates[0] ?? null;
+}
+
+function defaultLinkedSignal(symbol: string, market: TradingVenue, side: Side, eventTime?: number): TradeSignal {
+  const linked = bestLinkedSignal(symbol, market, side, eventTime);
+  if (linked) return linked;
+  return {
+    id: 0,
+    market,
+    strategyId: 'binance',
+    strategyName: 'Binance Account',
+    symbol,
+    timeframe: '15m',
+    exitMode: 'balanced',
+    side,
+    entry: 0,
+    takeProfit: 0,
+    stopLoss: 0,
+    expectedProfitPct: 0,
+    riskPct: 0,
+    openedAt: eventTime ?? Date.now(),
+    plannedExitAt: eventTime ?? Date.now(),
+    status: 'OPEN',
+    confidence: 0,
+    rr: 0,
+    reason: 'Imported from Binance account'
+  };
+}
+
+function rowPassesFilters(row: BinancePortfolioLedgerRow, filters: BinanceLivePortfolioFilters, query: string) {
+  const stamp = row.closedAt ?? row.openedAt;
+  const tradeLabel = formatTradeIdLabel(row.id).toUpperCase();
+  return stamp >= filters.rangeStart
+    && stamp <= filters.rangeEnd
+    && (filters.statusFilter === 'all'
+      || (filters.statusFilter === 'open' && row.status === 'OPEN')
+      || (filters.statusFilter === 'closed' && row.status !== 'OPEN')
+      || (filters.statusFilter === 'win' && row.status === 'WIN')
+      || (filters.statusFilter === 'loss' && row.status === 'LOSS'))
+    && (filters.sideFilter === 'all'
+      || (filters.sideFilter === 'long' && row.side === 'LONG')
+      || (filters.sideFilter === 'short' && row.side === 'SHORT'))
+    && (filters.marketFilter === 'all' || row.market === filters.marketFilter)
+    && (filters.timeframeFilter === 'all' || row.timeframe === filters.timeframeFilter)
+    && (filters.modeFilter === 'all' || row.exitMode === filters.modeFilter)
+    && (filters.scoreFilter === 'all' || scoreToneFromReason(row.failedRules.join(' ')) === filters.scoreFilter || (row.score == null && filters.scoreFilter === 'unscored'))
+    && (!query || tradeLabel.includes(query) || String(row.id).includes(query.replace(/^T-?/, '')));
+}
+
+function formatBinancePortfolioPnl(pnlUsdt: number | null, roiPct: number | null, fallbackPct: number) {
+  if (pnlUsdt == null) return `${fallbackPct >= 0 ? '+' : ''}${fallbackPct.toFixed(2)}%`;
+  return `${pnlUsdt >= 0 ? '+' : ''}${pnlUsdt.toFixed(2)} USDT\n${roiPct != null && roiPct >= 0 ? '+' : ''}${(roiPct ?? 0).toFixed(2)}%`;
+}
+
+async function readFuturesIncomeRows(startTime: number, endTime: number) {
+  const credentials = decryptSecret();
+  if (!credentials || !binanceVaultState.connected) return [];
+  return signedBinanceRequest<BinanceIncomeRow[]>(BINANCE_FUTURES_REST, '/fapi/v1/income', credentials.apiKey, credentials.secretKey, {
+    incomeType: 'REALIZED_PNL',
+    startTime: String(startTime),
+    endTime: String(endTime),
+    limit: '1000'
+  }).catch(() => []);
+}
+
+async function readFuturesUserTradesForSymbols(symbolsToRead: string[], startTime: number, endTime: number) {
+  const credentials = decryptSecret();
+  if (!credentials || !binanceVaultState.connected) return [];
+  const uniqueSymbols = [...new Set(symbolsToRead)].filter(Boolean).slice(0, 40);
+  const chunks = await Promise.all(uniqueSymbols.map(symbol =>
+    signedBinanceRequest<BinanceFuturesTrade[]>(BINANCE_FUTURES_REST, '/fapi/v1/userTrades', credentials.apiKey, credentials.secretKey, {
+      symbol,
+      startTime: String(startTime),
+      endTime: String(endTime),
+      limit: '1000'
+    }).catch(() => [])
+  ));
+  return chunks.flat();
+}
+
+async function readSpotOpenOrders() {
+  const credentials = decryptSecret();
+  if (!credentials || !binanceVaultState.connected) return [];
+  return signedBinanceRequest<BinanceOpenOrder[]>(BINANCE_REST, '/api/v3/openOrders', credentials.apiKey, credentials.secretKey).catch(() => []);
+}
+
+async function readFuturesOpenOrders() {
+  const credentials = decryptSecret();
+  if (!credentials || !binanceVaultState.connected) return [];
+  return signedBinanceRequest<BinanceOpenOrder[]>(BINANCE_FUTURES_REST, '/fapi/v1/openOrders', credentials.apiKey, credentials.secretKey).catch(() => []);
+}
+
+async function readSpotTradesForSymbols(symbolsToRead: string[], startTime: number, endTime: number) {
+  const credentials = decryptSecret();
+  if (!credentials || !binanceVaultState.connected) return [];
+  const uniqueSymbols = [...new Set(symbolsToRead)].filter(Boolean).slice(0, 40);
+  const chunks = await Promise.all(uniqueSymbols.map(symbol =>
+    signedBinanceRequest<BinanceSpotTrade[]>(BINANCE_REST, '/api/v3/myTrades', credentials.apiKey, credentials.secretKey, {
+      symbol,
+      startTime: String(startTime),
+      endTime: String(endTime),
+      limit: '1000'
+    }).catch(() => [])
+  ));
+  return chunks.flat();
+}
+
+async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
+  const wallet = await readBinanceWalletSummary();
+  const futuresPositions = filters.marketFilter === 'spot'
+    ? new Map<string, BinanceFuturesPosition>()
+    : await readOpenFuturesPositions().catch(() => new Map<string, BinanceFuturesPosition>());
+  const futuresOpenOrders = filters.marketFilter === 'spot' ? [] : await readFuturesOpenOrders();
+  const spotOpenOrders = filters.marketFilter === 'futures' ? [] : await readSpotOpenOrders();
+  const futuresIncomeRows = filters.marketFilter === 'spot' ? [] : await readFuturesIncomeRows(filters.rangeStart, filters.rangeEnd);
+  const futuresSymbols = [
+    ...new Set([
+      ...[...futuresPositions.values()].map(position => String(position.symbol ?? '')),
+      ...futuresIncomeRows.map(row => String(row.symbol ?? '')),
+      ...signals.filter(signal => signal.market === 'futures' && countsAsOpenExecution(signal.executionStatus)).map(signal => signal.symbol)
+    ].filter(Boolean))
+  ];
+  const futuresTrades = filters.marketFilter === 'spot' ? [] : await readFuturesUserTradesForSymbols(futuresSymbols, filters.rangeStart, filters.rangeEnd);
+  const spotSymbols = [
+    ...new Set([
+      ...wallet.balances.filter(balance => balance.asset !== 'USDT' && balance.valueUsdt > 0).map(balance => `${balance.asset}USDT`),
+      ...spotOpenOrders.map(order => String(order.symbol ?? '')),
+      ...signals.filter(signal => signal.market === 'spot' && countsAsOpenExecution(signal.executionStatus)).map(signal => signal.symbol)
+    ].filter(Boolean))
+  ];
+  const spotTrades = filters.marketFilter === 'futures' ? [] : await readSpotTradesForSymbols(spotSymbols, filters.rangeStart, filters.rangeEnd);
+
+  const rows: BinancePortfolioLedgerRow[] = [];
+  const currentCapital = filters.marketFilter === 'futures'
+    ? wallet.futuresTotalUsdt
+    : filters.marketFilter === 'spot'
+      ? wallet.totalValueUsdt
+      : wallet.totalValueUsdt + wallet.futuresTotalUsdt;
+
+  for (const position of futuresPositions.values()) {
+    const symbol = String(position.symbol ?? '');
+    const amount = Number(position.positionAmt ?? 0);
+    if (!symbol || !Number.isFinite(amount) || amount === 0) continue;
+    const side: Side = amount > 0 ? 'LONG' : 'SHORT';
+    const signal = defaultLinkedSignal(symbol, 'futures', side);
+    const metrics = getFuturesPositionMetrics(signal, new Map([[positionKey(symbol, side), position]]));
+    const entry = metrics?.entry ?? Number(position.entryPrice ?? signal.entry);
+    const marketPrice = metrics?.marketPrice ?? futuresTickers.get(symbol)?.price ?? null;
+    const pnlUsdt = metrics?.pnlUsdt ?? Number(position.unRealizedProfit ?? position.unrealizedProfit ?? 0);
+    const roiPct = metrics?.roiPct ?? null;
+    const notional = metrics?.notional ?? Math.abs(Number(position.notional ?? 0));
+    const allocationPct = wallet.futuresTotalUsdt > 0 ? (notional / wallet.futuresTotalUsdt) * 100 : 0;
+    rows.push({
+      id: signal.id,
+      label: formatTradeIdLabel(signal.id),
+      symbol,
+      strategyName: signal.strategyName,
+      status: 'OPEN',
+      executionStatus: signal.executionStatus ?? 'live_accepted',
+      executionLeverage: Number(position.leverage ?? signal.executionLeverage ?? liveExecutionRules.futuresLeverage) || null,
+      executionMarginMode: signal.executionMarginMode ?? null,
+      side,
+      market: 'futures',
+      venueLabel: `Futures x${Math.max(1, Number(position.leverage ?? signal.executionLeverage ?? liveExecutionRules.futuresLeverage) || 1)}`,
+      exitMode: signal.exitMode,
+      timeframe: signal.timeframe,
+      openedAt: signal.openedAt,
+      closedAt: null,
+      entry,
+      marketPrice,
+      liquidationPrice: metrics?.liquidationPrice ?? null,
+      expectedProfitPct: signal.expectedProfitPct,
+      riskPct: signal.riskPct,
+      pnl: roiPct ?? 0,
+      pnlUsdt,
+      roiPct,
+      pnlSource: 'Binance futures positionRisk',
+      pnlReadAt: Date.now(),
+      pnlLabel: formatBinancePortfolioPnl(pnlUsdt, roiPct, roiPct ?? 0),
+      score: extractSignalScore(signal.reason),
+      failedRules: [signal.reason],
+      allocationAmount: metrics?.signedNotional ?? Number(position.notional ?? 0),
+      allocationPct
+    });
+  }
+
+  const futuresRealizedBySymbol = new Map<string, BinanceIncomeRow[]>();
+  for (const income of futuresIncomeRows) {
+    const symbol = String(income.symbol ?? '');
+    if (!symbol || !Number(income.income ?? 0)) continue;
+    futuresRealizedBySymbol.set(symbol, [...(futuresRealizedBySymbol.get(symbol) ?? []), income]);
+  }
+  for (const [symbol, incomes] of futuresRealizedBySymbol) {
+    const readAt = Math.max(...incomes.map(row => Number(row.time ?? 0)).filter(Boolean));
+    const realizedPnl = incomes.reduce((sum, row) => sum + Number(row.income ?? 0), 0);
+    const linkedTrade = futuresTrades
+      .filter(trade => String(trade.symbol ?? '') === symbol)
+      .sort((a, b) => Number(b.time ?? 0) - Number(a.time ?? 0))[0];
+    const signal = defaultLinkedSignal(symbol, 'futures', bestLinkedSignal(symbol, 'futures', undefined, readAt)?.side ?? 'LONG', readAt);
+    const marketPrice = linkedTrade?.price ? Number(linkedTrade.price) : futuresTickers.get(symbol)?.price ?? signal.closePrice ?? null;
+    const entry = signal.entry || marketPrice || 0;
+    const roiPct = signal.binanceRoiPct ?? (entry && marketPrice ? percent(entry, marketPrice, signal.side) : null);
+    rows.push({
+      id: signal.id || Number(incomes[0]?.tranId ?? incomes[0]?.tradeId ?? 0),
+      label: formatTradeIdLabel(signal.id || Number(incomes[0]?.tranId ?? incomes[0]?.tradeId ?? 0)),
+      symbol,
+      strategyName: signal.strategyName,
+      status: realizedPnl >= 0 ? 'WIN' : 'LOSS',
+      executionStatus: signal.executionStatus ?? 'live_accepted',
+      executionLeverage: signal.executionLeverage ?? liveExecutionRules.futuresLeverage,
+      executionMarginMode: signal.executionMarginMode ?? null,
+      side: signal.side,
+      market: 'futures',
+      venueLabel: `Futures x${Math.max(1, signal.executionLeverage ?? liveExecutionRules.futuresLeverage)}`,
+      exitMode: signal.exitMode,
+      timeframe: signal.timeframe,
+      openedAt: signal.openedAt,
+      closedAt: readAt || null,
+      entry,
+      marketPrice,
+      liquidationPrice: null,
+      expectedProfitPct: signal.expectedProfitPct,
+      riskPct: signal.riskPct,
+      pnl: roiPct ?? 0,
+      pnlUsdt: realizedPnl,
+      roiPct,
+      pnlSource: 'Binance futures income REALIZED_PNL',
+      pnlReadAt: readAt || Date.now(),
+      pnlLabel: formatBinancePortfolioPnl(realizedPnl, roiPct, roiPct ?? 0),
+      score: extractSignalScore(signal.reason),
+      failedRules: [signal.reason],
+      allocationAmount: Number(linkedTrade?.quoteQty ?? 0),
+      allocationPct: wallet.futuresTotalUsdt > 0 && Number(linkedTrade?.quoteQty ?? 0) > 0 ? (Number(linkedTrade?.quoteQty ?? 0) / wallet.futuresTotalUsdt) * 100 : 0
+    });
+  }
+
+  for (const balance of wallet.balances) {
+    if (balance.asset === 'USDT' || balance.valueUsdt <= 0) continue;
+    const symbol = `${balance.asset}USDT`;
+    const signal = defaultLinkedSignal(symbol, 'spot', 'LONG');
+    const relatedTrades = spotTrades.filter(trade => String(trade.symbol ?? '') === symbol && trade.isBuyer);
+    const buyQuote = relatedTrades.reduce((sum, trade) => sum + Number(trade.quoteQty ?? 0), 0);
+    const buyQty = relatedTrades.reduce((sum, trade) => sum + Number(trade.qty ?? 0), 0);
+    const entry = buyQty > 0 ? buyQuote / buyQty : balance.priceUsdt || signal.entry || 0;
+    const pnlUsdt = entry > 0 ? balance.valueUsdt - (balance.total * entry) : null;
+    const roiPct = entry > 0 ? ((balance.priceUsdt - entry) / entry) * 100 : null;
+    rows.push({
+      id: signal.id,
+      label: formatTradeIdLabel(signal.id),
+      symbol,
+      strategyName: signal.strategyName,
+      status: 'OPEN',
+      executionStatus: signal.executionStatus ?? 'live_accepted',
+      executionLeverage: null,
+      executionMarginMode: null,
+      side: 'LONG',
+      market: 'spot',
+      venueLabel: 'Spot',
+      exitMode: signal.exitMode,
+      timeframe: signal.timeframe,
+      openedAt: signal.openedAt,
+      closedAt: null,
+      entry,
+      marketPrice: balance.priceUsdt,
+      liquidationPrice: null,
+      expectedProfitPct: signal.expectedProfitPct,
+      riskPct: signal.riskPct,
+      pnl: roiPct ?? 0,
+      pnlUsdt,
+      roiPct,
+      pnlSource: 'Binance balances + spot myTrades',
+      pnlReadAt: Date.now(),
+      pnlLabel: formatBinancePortfolioPnl(pnlUsdt, roiPct, roiPct ?? 0),
+      score: extractSignalScore(signal.reason),
+      failedRules: [signal.reason],
+      allocationAmount: balance.valueUsdt,
+      allocationPct: wallet.totalValueUsdt > 0 ? (balance.valueUsdt / wallet.totalValueUsdt) * 100 : 0
+    });
+  }
+
+  const spotSellsBySymbol = new Map<string, BinanceSpotTrade[]>();
+  for (const trade of spotTrades.filter(trade => trade.isBuyer === false)) {
+    const symbol = String(trade.symbol ?? '');
+    spotSellsBySymbol.set(symbol, [...(spotSellsBySymbol.get(symbol) ?? []), trade]);
+  }
+  for (const [symbol, sells] of spotSellsBySymbol) {
+    const closedAt = Math.max(...sells.map(trade => Number(trade.time ?? 0)).filter(Boolean));
+    const signal = defaultLinkedSignal(symbol, 'spot', 'LONG', closedAt);
+    const buys = spotTrades.filter(trade => String(trade.symbol ?? '') === symbol && trade.isBuyer);
+    const sellQuote = sells.reduce((sum, trade) => sum + Number(trade.quoteQty ?? 0), 0);
+    const sellQty = sells.reduce((sum, trade) => sum + Number(trade.qty ?? 0), 0);
+    const buyQuote = buys.reduce((sum, trade) => sum + Number(trade.quoteQty ?? 0), 0);
+    const buyQty = buys.reduce((sum, trade) => sum + Number(trade.qty ?? 0), 0);
+    const entry = buyQty > 0 ? buyQuote / buyQty : signal.entry;
+    const closePrice = sellQty > 0 ? sellQuote / sellQty : tickers.get(symbol)?.price ?? entry;
+    const realizedPnl = sellQty > 0 && entry > 0 ? sellQuote - (sellQty * entry) : 0;
+    const roiPct = entry > 0 ? percent(entry, closePrice, 'LONG') : null;
+    rows.push({
+      id: signal.id || Number(sells[0]?.orderId ?? sells[0]?.id ?? 0),
+      label: formatTradeIdLabel(signal.id || Number(sells[0]?.orderId ?? sells[0]?.id ?? 0)),
+      symbol,
+      strategyName: signal.strategyName,
+      status: realizedPnl >= 0 ? 'WIN' : 'LOSS',
+      executionStatus: signal.executionStatus ?? 'live_accepted',
+      executionLeverage: null,
+      executionMarginMode: null,
+      side: 'LONG',
+      market: 'spot',
+      venueLabel: 'Spot',
+      exitMode: signal.exitMode,
+      timeframe: signal.timeframe,
+      openedAt: signal.openedAt,
+      closedAt,
+      entry,
+      marketPrice: closePrice,
+      liquidationPrice: null,
+      expectedProfitPct: signal.expectedProfitPct,
+      riskPct: signal.riskPct,
+      pnl: roiPct ?? 0,
+      pnlUsdt: realizedPnl,
+      roiPct,
+      pnlSource: 'Binance spot myTrades',
+      pnlReadAt: closedAt || Date.now(),
+      pnlLabel: formatBinancePortfolioPnl(realizedPnl, roiPct, roiPct ?? 0),
+      score: extractSignalScore(signal.reason),
+      failedRules: [signal.reason],
+      allocationAmount: sellQuote,
+      allocationPct: wallet.totalValueUsdt > 0 ? (sellQuote / wallet.totalValueUsdt) * 100 : 0
+    });
+  }
+
+  const dedupedRows = [...new Map(rows.map(row => [`${row.market}:${row.symbol}:${row.status}:${row.closedAt ?? 0}:${row.side}:${row.id}`, row])).values()];
+  const analyticsRows = dedupedRows.filter(row => rowPassesFilters(row, filters, ''));
+  const acceptedRows = dedupedRows
+    .filter(row => rowPassesFilters(row, filters, filters.acceptedQuery))
+    .sort((a, b) => (b.closedAt ?? b.openedAt) - (a.closedAt ?? a.openedAt));
+  const rejectedRows: BinancePortfolioLedgerRow[] = [];
+  const openPnl = analyticsRows.filter(row => row.status === 'OPEN').reduce((sum, row) => sum + (row.pnlUsdt ?? 0), 0);
+  const closedPnl = analyticsRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + (row.pnlUsdt ?? 0), 0);
+  const netPnl = openPnl + closedPnl;
+  const startingBalance = currentCapital - netPnl;
+  const filterCounts = {
+    statusAll: analyticsRows.length,
+    open: analyticsRows.filter(row => row.status === 'OPEN').length,
+    closed: analyticsRows.filter(row => row.status !== 'OPEN').length,
+    win: analyticsRows.filter(row => row.status === 'WIN').length,
+    loss: analyticsRows.filter(row => row.status === 'LOSS').length,
+    sideAll: analyticsRows.length,
+    long: analyticsRows.filter(row => row.side === 'LONG').length,
+    short: analyticsRows.filter(row => row.side === 'SHORT').length,
+    marketAll: analyticsRows.length,
+    spot: analyticsRows.filter(row => row.market === 'spot').length,
+    futures: analyticsRows.filter(row => row.market === 'futures').length,
+    scoreAll: analyticsRows.length,
+    scoreGreen: analyticsRows.filter(row => row.score != null && row.score >= 60).length,
+    scoreYellow: analyticsRows.filter(row => row.score != null && row.score >= 40 && row.score < 60).length,
+    scoreRed: analyticsRows.filter(row => row.score != null && row.score < 40).length,
+    unscored: analyticsRows.filter(row => row.score == null).length
+  };
+  return {
+    wallet,
+    summary: {
+      startingBalance,
+      currentCapital,
+      openPnl,
+      closedPnl,
+      netPnl,
+      generatedCount: acceptedRows.length + rejectedRows.length,
+      acceptedCount: acceptedRows.length,
+      rejectedCount: rejectedRows.length,
+      openCount: filterCounts.open,
+      closedCount: filterCounts.closed,
+      bestTrade: analyticsRows.reduce<BinancePortfolioLedgerRow | null>((best, row) => !best || (row.pnlUsdt ?? row.pnl) > (best.pnlUsdt ?? best.pnl) ? row : best, null),
+      worstTrade: analyticsRows.reduce<BinancePortfolioLedgerRow | null>((worst, row) => !worst || (row.pnlUsdt ?? row.pnl) < (worst.pnlUsdt ?? worst.pnl) ? row : worst, null),
+      longCount: filterCounts.long,
+      shortCount: filterCounts.short,
+      spotCount: filterCounts.spot,
+      futuresCount: filterCounts.futures
+    },
+    filterCounts,
+    acceptedRows,
+    rejectedRows
+  };
+}
+
 function parseTelegramCardData(title: string, message: string, level: 'info' | 'win' | 'loss'): TelegramCardData {
   const chunks = message.split('|').map(part => part.trim()).filter(Boolean);
   const tradeId = title.match(/T-[0-9A-Z]+/)?.[0] ?? '#--';
@@ -5290,6 +5776,47 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
       return;
     }
 
+    {
+      const binanceRangeStart = getRangeStartForKey(range, customFrom);
+      const binanceRangeEnd = getRangeEndForKey(range, customTo);
+      const portfolio = await buildBinanceLivePortfolio({
+        rangeStart: binanceRangeStart,
+        rangeEnd: binanceRangeEnd,
+        statusFilter,
+        sideFilter,
+        marketFilter,
+        timeframeFilter,
+        modeFilter,
+        scoreFilter,
+        acceptedKind,
+        rejectedKind,
+        acceptedQuery: '',
+        rejectedQuery: ''
+      });
+      const payload = {
+        ok: true,
+        summary: {
+          startingBalance: portfolio.summary.startingBalance,
+          currentCapital: portfolio.summary.currentCapital,
+          openPnl: portfolio.summary.openPnl,
+          closedPnl: portfolio.summary.closedPnl,
+          netPnl: portfolio.summary.netPnl,
+          generatedCount: portfolio.summary.generatedCount,
+          acceptedCount: portfolio.summary.acceptedCount,
+          rejectedCount: portfolio.summary.rejectedCount,
+          openCount: portfolio.summary.openCount,
+          closedCount: portfolio.summary.closedCount,
+          longCount: portfolio.summary.longCount,
+          shortCount: portfolio.summary.shortCount,
+          spotCount: portfolio.summary.spotCount,
+          futuresCount: portfolio.summary.futuresCount
+        },
+        filterCounts: portfolio.filterCounts
+      };
+      res.json(payload);
+      return;
+    }
+
     const rangeStart = getRangeStartForKey(range, customFrom);
     const rangeEnd = getRangeEndForKey(range, customTo);
     const acceptedStatuses = new Set<NonNullable<TradeSignal['executionStatus']>>(['live_accepted', 'test_accepted']);
@@ -5426,6 +5953,42 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
     const cached = livePortfolioCache.get(cacheKey);
     if (cached && Date.now() - cached.createdAt < 0) {
       res.json(cached.payload);
+      return;
+    }
+
+    {
+      const binanceRangeStart = getRangeStartForKey(range, customFrom);
+      const binanceRangeEnd = getRangeEndForKey(range, customTo);
+      const portfolio = await buildBinanceLivePortfolio({
+        rangeStart: binanceRangeStart,
+        rangeEnd: binanceRangeEnd,
+        statusFilter,
+        sideFilter,
+        marketFilter,
+        timeframeFilter,
+        modeFilter,
+        scoreFilter,
+        acceptedKind,
+        rejectedKind,
+        acceptedQuery,
+        rejectedQuery
+      });
+      const payload = {
+        ok: true,
+        summary: portfolio.summary,
+        filterCounts: portfolio.filterCounts,
+        accepted: {
+          total: portfolio.acceptedRows.length,
+          page: 1,
+          pageSize: portfolio.acceptedRows.length,
+          rows: portfolio.acceptedRows
+        },
+        rejected: {
+          total: portfolio.rejectedRows.length,
+          rows: portfolio.rejectedRows
+        }
+      };
+      res.json(payload);
       return;
     }
 
