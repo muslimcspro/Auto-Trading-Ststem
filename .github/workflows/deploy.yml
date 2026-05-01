@@ -92,8 +92,11 @@ jobs:
           touch .env
           CURRENT_ADMIN_PASSWORD="$(grep -m1 '^ADMIN_PASSWORD=' .env | cut -d= -f2- || true)"
           TEMP_ADMIN_PASSWORD_GENERATED=0
-          if [ -z "$ADMIN_PASSWORD" ]; then
-            if [ "$RESET_ADMIN_PASSWORD" = "true" ] || [ -z "$CURRENT_ADMIN_PASSWORD" ]; then
+          if [ "$RESET_ADMIN_PASSWORD" = "true" ]; then
+            ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
+            TEMP_ADMIN_PASSWORD_GENERATED=1
+          elif [ -z "$ADMIN_PASSWORD" ]; then
+            if [ -z "$CURRENT_ADMIN_PASSWORD" ]; then
               ADMIN_PASSWORD="Tmp-$(openssl rand -hex 12)-Aa1!"
               TEMP_ADMIN_PASSWORD_GENERATED=1
             else
