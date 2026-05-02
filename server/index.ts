@@ -2154,22 +2154,6 @@ async function monitorLiveFuturesProtection() {
 
     if (active.length === 0) return;
 
-    if (liveExecutionRules.portfolioFloorEnabled) {
-      const portfolioFloor = getDynamicPortfolioFloor(active);
-      if (portfolioFloor.portfolioR >= portfolioFloor.armR) {
-        portfolioFloorArmed = true;
-        portfolioFloorPeakR = Math.max(portfolioFloorPeakR, portfolioFloor.portfolioR);
-      }
-      if (portfolioFloorArmed && portfolioFloor.portfolioR <= portfolioFloor.floorR) {
-        for (const item of active) {
-          await closeFuturesPosition(item.signal, item.position, `Dynamic portfolio floor ${portfolioFloor.portfolioR.toFixed(2)}R`);
-        }
-        portfolioFloorArmed = false;
-        portfolioFloorPeakR = 0;
-        return;
-      }
-    }
-
     for (const { signal, position, metrics } of active) {
       const price = metrics.marketPrice ?? 0;
       const hitStop = signal.side === 'LONG' ? price <= signal.stopLoss : price >= signal.stopLoss;
@@ -2178,40 +2162,10 @@ async function monitorLiveFuturesProtection() {
         continue;
       }
 
-      const openR = signalOpenR(signal, price);
-      if (liveExecutionRules.breakEvenEnabled && openR >= dynamicBreakEvenTriggerR(signal) && !signal.profitProtectionArmedAt) {
-        signal.profitProtectionArmedAt = Date.now();
-        signal.trailingStop = breakEvenStopPrice(signal, metrics.entry);
-        signal.extremePrice = price;
-        saveState();
-      }
-
       const hitTarget = signal.side === 'LONG' ? price >= signal.takeProfit : price <= signal.takeProfit;
-      if (hitTarget && !liveExecutionRules.trailingStopEnabled) {
+      if (hitTarget) {
         await closeFuturesPosition(signal, position, 'Take Profit');
         continue;
-      }
-      if (hitTarget && liveExecutionRules.trailingStopEnabled && !signal.profitProtectionArmedAt) {
-        signal.profitProtectionArmedAt = Date.now();
-        signal.trailingStop = breakEvenStopPrice(signal, metrics.entry);
-        signal.extremePrice = price;
-      }
-
-      if (!signal.profitProtectionArmedAt) continue;
-      signal.extremePrice = signal.side === 'LONG'
-        ? Math.max(signal.extremePrice ?? price, price)
-        : Math.min(signal.extremePrice ?? price, price);
-      const gap = liveExecutionRules.trailingStopEnabled ? dynamicTrailingGapPct(signal, price) : 0;
-      const proposedStop = signal.side === 'LONG'
-        ? Math.max(breakEvenStopPrice(signal, metrics.entry), (signal.extremePrice ?? price) * (1 - gap / 100))
-        : Math.min(breakEvenStopPrice(signal, metrics.entry), (signal.extremePrice ?? price) * (1 + gap / 100));
-      signal.trailingStop = typeof signal.trailingStop === 'number'
-        ? signal.side === 'LONG' ? Math.max(signal.trailingStop, proposedStop) : Math.min(signal.trailingStop, proposedStop)
-        : proposedStop;
-      const hitProtectedStop = signal.side === 'LONG' ? price <= signal.trailingStop : price >= signal.trailingStop;
-      saveState();
-      if (hitProtectedStop) {
-        await closeFuturesPosition(signal, position, liveExecutionRules.trailingStopEnabled ? 'Trailing Stop' : 'Break-even Lock');
       }
     }
   } catch (error) {
@@ -5576,31 +5530,6 @@ function updateOpenSignals() {
     if (!ticker) continue;
     const currentPnl = percent(signal.entry, ticker.price, signal.side);
     signal.maxFavorablePnlPct = Math.max(signal.maxFavorablePnlPct ?? 0, currentPnl);
-    signal.profitLockPct = Math.max(signal.profitLockPct ?? 0, profitLockFromPeak(signal));
-    if ((signal.profitLockPct ?? 0) > 0) {
-      signal.profitProtectionArmedAt = signal.profitProtectionArmedAt ?? Date.now();
-      const lockedPrice = priceFromLockedPnl(signal, signal.profitLockPct ?? 0);
-      signal.trailingStop = typeof signal.trailingStop === 'number'
-        ? signal.side === 'LONG' ? Math.max(signal.trailingStop, lockedPrice) : Math.min(signal.trailingStop, lockedPrice)
-        : lockedPrice;
-    }
-
-    const peakPnl = signal.maxFavorablePnlPct ?? 0;
-    const givebackExit = peakPnl >= signal.riskPct * QUALITY_GATE.profitArmR
-      && currentPnl > 0
-      && currentPnl <= Math.max(signal.profitLockPct ?? 0, peakPnl * (1 - QUALITY_GATE.profitGivebackRatio));
-    if (givebackExit) {
-      closeLedgerSignal(signal, 'WIN', priceFromLockedPnl(signal, Math.max(signal.profitLockPct ?? currentPnl, currentPnl)), 'with profit-decay lock');
-      continue;
-    }
-
-    const hitProtectedStop = typeof signal.trailingStop === 'number'
-      && (signal.side === 'LONG' ? ticker.price <= signal.trailingStop : ticker.price >= signal.trailingStop)
-      && (signal.profitLockPct ?? 0) > 0;
-    if (hitProtectedStop) {
-      closeLedgerSignal(signal, 'WIN', signal.trailingStop ?? ticker.price, 'with protected profit');
-      continue;
-    }
 
     const hitStop = signal.side === 'LONG' ? ticker.price <= signal.stopLoss : ticker.price >= signal.stopLoss;
     const hitTarget = signal.side === 'LONG' ? ticker.price >= signal.takeProfit : ticker.price <= signal.takeProfit;
@@ -5608,41 +5537,8 @@ function updateOpenSignals() {
       closeLedgerSignal(signal, 'LOSS', signal.stopLoss, 'with loss');
       continue;
     }
-
-    if (hitTarget && !signal.profitProtectionArmedAt) {
-      signal.profitProtectionArmedAt = Date.now();
-      signal.extremePrice = ticker.price;
-      signal.maxFavorablePnlPct = Math.max(signal.maxFavorablePnlPct ?? 0, signal.expectedProfitPct);
-      signal.profitLockPct = Math.max(signal.profitLockPct ?? 0, profitLockFromPeak(signal));
-      const trailGapPct = Math.max(signal.riskPct * 0.25, signal.expectedProfitPct * 0.12);
-      signal.trailingStop = signal.side === 'LONG'
-        ? Math.max(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), ticker.price * (1 - trailGapPct / 100))
-        : Math.min(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), ticker.price * (1 + trailGapPct / 100));
-    }
-
-    if (signal.profitProtectionArmedAt) {
-      const trailGapPct = Math.max(signal.riskPct * 0.25, signal.expectedProfitPct * 0.12);
-      signal.extremePrice = signal.side === 'LONG'
-        ? Math.max(signal.extremePrice ?? ticker.price, ticker.price)
-        : Math.min(signal.extremePrice ?? ticker.price, ticker.price);
-      const proposedTrailingStop = signal.side === 'LONG'
-        ? Math.max(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), (signal.extremePrice ?? ticker.price) * (1 - trailGapPct / 100))
-        : Math.min(priceFromLockedPnl(signal, signal.profitLockPct ?? 0), (signal.extremePrice ?? ticker.price) * (1 + trailGapPct / 100));
-      signal.trailingStop = typeof signal.trailingStop === 'number'
-        ? (signal.side === 'LONG' ? Math.max(signal.trailingStop, proposedTrailingStop) : Math.min(signal.trailingStop, proposedTrailingStop))
-        : proposedTrailingStop;
-      const hitTrailingStop = signal.side === 'LONG'
-        ? ticker.price <= (signal.trailingStop ?? signal.entry)
-        : ticker.price >= (signal.trailingStop ?? signal.entry);
-      if (!hitTrailingStop) continue;
-      closeLedgerSignal(signal, 'WIN', signal.trailingStop ?? ticker.price, 'with protected profit');
-      continue;
-    }
-
-    if (!hitTarget) continue;
-    closeLedgerSignal(signal, 'WIN', signal.takeProfit, 'with profit');
+    if (hitTarget) closeLedgerSignal(signal, 'WIN', signal.takeProfit, 'with profit');
   }
-  protectLedgerNetPnl();
 }
 
 function getStats(): StrategyStats[] {
