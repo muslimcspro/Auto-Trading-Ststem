@@ -6374,21 +6374,33 @@ function PerformanceChart({
           <div>
             <span>Ledger Simulation</span>
             <strong>{`${(ledgerSimulationSnapshot?.currentCapital ?? ledgerSimulationDraft.startingCapitalUsdt).toFixed(2)} USDT`}</strong>
-            <small>{`Spot ${(ledgerSimulationSnapshot?.spot?.availableCapital ?? 0).toFixed(2)} free • Futures ${(ledgerSimulationSnapshot?.futures?.availableCapital ?? 0).toFixed(2)} free`}</small>
+            <small>{`Spot ${(ledgerSimulationSnapshot?.spot?.availableCapital ?? 0).toFixed(2)} free | Futures ${(ledgerSimulationSnapshot?.futures?.availableCapital ?? 0).toFixed(2)} free`}</small>
           </div>
           <button type="button" className="primary small" disabled={ledgerSimulationSaving || JSON.stringify(ledgerSimulationSettings) === JSON.stringify(ledgerSimulationDraft)} onClick={saveLedgerSimulation}>
             {ledgerSimulationSaving ? 'Saving' : 'Apply'}
           </button>
         </div>
-        <div className="ledger-simulation-grid">
-          <label><span>Spot Capital</span><input type="number" min={0} step={5} value={ledgerSimulationDraft.spotCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotCapitalUsdt: Number(event.target.value) })} /></label>
-          <label><span>Fut Capital</span><input type="number" min={0} step={5} value={ledgerSimulationDraft.futuresCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresCapitalUsdt: Number(event.target.value) })} /></label>
-          <label><span>Spot Reserve</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.spotReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotReserveRatio: Number(event.target.value) })} /></label>
-          <label><span>Fut Reserve</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.futuresReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresReserveRatio: Number(event.target.value) })} /></label>
-          <label><span>Spot Max</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.spotMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMaxOpenTrades: Number(event.target.value) })} /></label>
-          <label><span>Fut Max</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.futuresMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMaxOpenTrades: Number(event.target.value) })} /></label>
-          <label><span>Spot Min</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.spotMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMinNotionalUsdt: Number(event.target.value) })} /></label>
-          <label><span>Fut Min</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.futuresMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMinNotionalUsdt: Number(event.target.value) })} /></label>
+        <div className="ledger-wallet-panels">
+          <section className="ledger-wallet-panel ledger-wallet-spot">
+            <div className="ledger-wallet-head"><span>Spot Wallet</span><strong>{`${(ledgerSimulationSnapshot?.spot?.currentCapital ?? ledgerSimulationDraft.spotCapitalUsdt).toFixed(2)} USDT`}</strong><small>{`${(ledgerSimulationSnapshot?.spot?.availableCapital ?? 0).toFixed(2)} available`}</small></div>
+            <div className="ledger-simulation-grid wallet-grid">
+              <label><span>Capital</span><input type="number" min={0} step={5} value={ledgerSimulationDraft.spotCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotCapitalUsdt: Number(event.target.value) })} /></label>
+              <label><span>Reserve %</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.spotReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotReserveRatio: Number(event.target.value) })} /></label>
+              <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.spotMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMaxOpenTrades: Number(event.target.value) })} /></label>
+              <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.spotMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMinNotionalUsdt: Number(event.target.value) })} /></label>
+            </div>
+          </section>
+          <section className="ledger-wallet-panel ledger-wallet-futures">
+            <div className="ledger-wallet-head"><span>Futures Wallet</span><strong>{`${(ledgerSimulationSnapshot?.futures?.currentCapital ?? ledgerSimulationDraft.futuresCapitalUsdt).toFixed(2)} USDT`}</strong><small>{`${(ledgerSimulationSnapshot?.futures?.availableCapital ?? 0).toFixed(2)} available`}</small></div>
+            <div className="ledger-simulation-grid wallet-grid">
+              <label><span>Capital</span><input type="number" min={0} step={5} value={ledgerSimulationDraft.futuresCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresCapitalUsdt: Number(event.target.value) })} /></label>
+              <label><span>Reserve %</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.futuresReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresReserveRatio: Number(event.target.value) })} /></label>
+              <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.futuresMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMaxOpenTrades: Number(event.target.value) })} /></label>
+              <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.futuresMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMinNotionalUsdt: Number(event.target.value) })} /></label>
+            </div>
+          </section>
+        </div>
+        <div className="ledger-simulation-grid ledger-shared-grid">
           <label><span>Risk %</span><input type="number" min={0.1} max={20} step={0.1} value={ledgerSimulationDraft.riskPerTradePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, riskPerTradePct: Number(event.target.value) })} /></label>
           <label><span>Slip %</span><input type="number" min={0} max={5} step={0.01} value={ledgerSimulationDraft.slippagePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, slippagePct: Number(event.target.value) })} /></label>
           <label><span>Fut Lev</span><input type="number" min={1} max={20} step={1} value={ledgerSimulationDraft.futuresLeverage} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresLeverage: Number(event.target.value) })} /></label>
