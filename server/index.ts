@@ -919,6 +919,7 @@ let futuresWs: WebSocket | null = null;
 let nextSignalId = 1;
 let scanVersion = 0;
 let scanRunning = false;
+let ledgerExecutionRunning = false;
 let dashboardCache: {
   stats: StrategyStats[];
   liveSignals: number;
@@ -2440,6 +2441,31 @@ async function applyExecutionPipeline(signal: TradeSignal) {
   }
 }
 
+async function processLedgerExecutions() {
+  if (ledgerExecutionRunning || !binanceVaultState.connected) return;
+  const executableSignals = signals
+    .filter(signal =>
+      signal.status === 'OPEN'
+      && (!signal.executionStatus || signal.executionStatus === 'pending')
+    )
+    .reverse();
+  if (executableSignals.length === 0) return;
+  ledgerExecutionRunning = true;
+  try {
+    for (const signal of executableSignals) {
+      await applyExecutionPipeline(signal);
+      invalidateComputedCaches();
+      saveState();
+      broadcast('signal', signal);
+      if (countsAsOpenExecution(signal.executionStatus)) {
+        void deliverPrivateTelegramSignal(signal);
+      }
+    }
+  } finally {
+    ledgerExecutionRunning = false;
+  }
+}
+
 function loadBinanceVault() {
   let vault = readSecureSetting<StoredBinanceVault>('binance_vault');
   if (!vault && fs.existsSync(BINANCE_VAULT_FILE)) {
@@ -2691,9 +2717,10 @@ function shouldSendPrivateTelegramTradeEvent(signal: TradeSignal, subscriber: Te
 
 function buildSignalNotificationPayload(signal: TradeSignal) {
   const venue = signal.market === 'futures' ? `FUTURES x${Math.max(1, signal.executionLeverage ?? liveExecutionRules.futuresLeverage)}` : 'SPOT';
+  const executionLabel = signal.executionStatus ?? 'ledger_generated';
   return {
     title: `New Signal ${formatTradeIdLabel(signal.id)}`,
-    message: `${venue} | ${signal.symbol} ${signal.side} | Direction ENTRY | Entry price ${formatDisplayNumber(signal.entry)} | TP ${signal.expectedProfitPct.toFixed(2)}% | SL -${signal.riskPct.toFixed(2)}% | Duration -- | Execution ${signal.executionStatus ?? 'pending'}`
+    message: `${venue} | ${signal.symbol} ${signal.side} | Direction ENTRY | Entry price ${formatDisplayNumber(signal.entry)} | TP ${signal.expectedProfitPct.toFixed(2)}% | SL -${signal.riskPct.toFixed(2)}% | Duration -- | Execution ${executionLabel}`
   };
 }
 
@@ -5341,15 +5368,13 @@ async function scanMarket() {
           if (hasOpenSameDirectionSignal(candidate.signal.symbol, candidate.market, candidate.signal.side)) continue;
           if (hasExcessDirectionalExposure(candidate)) continue;
           candidate.signal.reason = `${candidate.signal.reason} | Score ${candidate.score.toFixed(1)} | Momentum ${(candidate.components.momentum * 100).toFixed(0)} | Volume ${(candidate.components.volume * 100).toFixed(0)} | Alignment ${(candidate.components.alignment * 100).toFixed(0)} | RR ${(candidate.components.riskReward * 100).toFixed(0)}`;
-          const shouldPublishSignal = await applyExecutionPipeline(candidate.signal);
-          if (!shouldPublishSignal) continue;
           signals.unshift(candidate.signal);
           invalidateComputedCaches();
           saveState();
           broadcast('signal', candidate.signal);
           const payload = buildSignalNotificationPayload(candidate.signal);
           await notify(payload.title, payload.message, 'info');
-          await deliverPrivateTelegramSignal(candidate.signal);
+          void processLedgerExecutions();
         }
       }
     };
@@ -5758,47 +5783,6 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
       return;
     }
 
-    {
-      const binanceRangeStart = getRangeStartForKey(range, customFrom);
-      const binanceRangeEnd = getRangeEndForKey(range, customTo);
-      const portfolio = await buildBinanceLivePortfolio({
-        rangeStart: binanceRangeStart,
-        rangeEnd: binanceRangeEnd,
-        statusFilter,
-        sideFilter,
-        marketFilter,
-        timeframeFilter,
-        modeFilter,
-        scoreFilter,
-        acceptedKind,
-        rejectedKind,
-        acceptedQuery: '',
-        rejectedQuery: ''
-      });
-      const payload = {
-        ok: true,
-        summary: {
-          startingBalance: portfolio.summary.startingBalance,
-          currentCapital: portfolio.summary.currentCapital,
-          openPnl: portfolio.summary.openPnl,
-          closedPnl: portfolio.summary.closedPnl,
-          netPnl: portfolio.summary.netPnl,
-          generatedCount: portfolio.summary.generatedCount,
-          acceptedCount: portfolio.summary.acceptedCount,
-          rejectedCount: portfolio.summary.rejectedCount,
-          openCount: portfolio.summary.openCount,
-          closedCount: portfolio.summary.closedCount,
-          longCount: portfolio.summary.longCount,
-          shortCount: portfolio.summary.shortCount,
-          spotCount: portfolio.summary.spotCount,
-          futuresCount: portfolio.summary.futuresCount
-        },
-        filterCounts: portfolio.filterCounts
-      };
-      res.json(payload);
-      return;
-    }
-
     const rangeStart = getRangeStartForKey(range, customFrom);
     const rangeEnd = getRangeEndForKey(range, customTo);
     const acceptedStatuses = new Set<NonNullable<TradeSignal['executionStatus']>>(['live_accepted', 'test_accepted']);
@@ -5935,42 +5919,6 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
     const cached = livePortfolioCache.get(cacheKey);
     if (cached && Date.now() - cached.createdAt < 3000) {
       res.json(cached.payload);
-      return;
-    }
-
-    {
-      const binanceRangeStart = getRangeStartForKey(range, customFrom);
-      const binanceRangeEnd = getRangeEndForKey(range, customTo);
-      const portfolio = await buildBinanceLivePortfolio({
-        rangeStart: binanceRangeStart,
-        rangeEnd: binanceRangeEnd,
-        statusFilter,
-        sideFilter,
-        marketFilter,
-        timeframeFilter,
-        modeFilter,
-        scoreFilter,
-        acceptedKind,
-        rejectedKind,
-        acceptedQuery,
-        rejectedQuery
-      });
-      const payload = {
-        ok: true,
-        summary: portfolio.summary,
-        filterCounts: portfolio.filterCounts,
-        accepted: {
-          total: portfolio.acceptedRows.length,
-          page: 1,
-          pageSize: portfolio.acceptedRows.length,
-          rows: portfolio.acceptedRows
-        },
-        rejected: {
-          total: portfolio.rejectedRows.length,
-          rows: portfolio.rejectedRows
-        }
-      };
-      res.json(payload);
       return;
     }
 
@@ -6483,9 +6431,11 @@ async function initializeRuntime() {
   ensureSymbolUniversesFromTickers();
   await runStartupStep('inactive open signal cleanup', async () => closeInactiveMarketSignals());
   await runStartupStep('market scan', scanMarket);
+  await runStartupStep('ledger execution sync', processLedgerExecutions);
   setInterval(pollTickersFallback, 5000);
   setInterval(pollFuturesTickersFallback, 5000);
   setInterval(monitorLiveFuturesProtection, 5000);
+  setInterval(processLedgerExecutions, 5000);
   setInterval(closeInactiveMarketSignals, 60_000);
   setInterval(scanMarket, 60_000);
   setInterval(syncTelegramSubscribersFromBot, 15000);
