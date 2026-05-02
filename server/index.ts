@@ -348,6 +348,15 @@ function formatTradeIdLabel(id: number) {
   return `T-${Math.max(0, id).toString(36).toUpperCase().padStart(6, '0')}`;
 }
 
+function stablePortfolioRowId(seed: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return 900000000 + (Math.abs(hash) % 90000000);
+}
+
 const PUBLIC_TELEGRAM_BOT_TOKEN = (process.env.PUBLIC_TELEGRAM_BOT_TOKEN ?? process.env.TELEGRAM_BOT_TOKEN ?? '').trim();
 const PUBLIC_TELEGRAM_CHAT_ID = (process.env.PUBLIC_TELEGRAM_CHAT_ID ?? process.env.TELEGRAM_CHAT_ID ?? '@Autotradingbot71').trim();
 const PUBLIC_TELEGRAM_BOT_USERNAME = (process.env.PUBLIC_TELEGRAM_BOT_USERNAME ?? 'Autotradingbot71').trim();
@@ -863,8 +872,9 @@ let tickers = new Map<string, PriceTicker>();
 let futuresSymbols: SymbolInfo[] = [];
 let futuresTickers = new Map<string, PriceTicker>();
 const SUPPORTED_TIMEFRAMES: Timeframe[] = ['5m', '10m', '15m', '1h', '2h', '4h', '1d'];
+const DEFAULT_SELECTED_TIMEFRAMES: Timeframe[] = ['5m', '10m', '15m'];
 let selectedStrategies = new Set<string>();
-let selectedTimeframes = new Set<Timeframe>(['5m', '10m', '15m']);
+let selectedTimeframes = new Set<Timeframe>(DEFAULT_SELECTED_TIMEFRAMES);
 let selectedExitModes = new Set<ExitMode>(['balanced']);
 let selectedMarketScope: StrategyMarketScope = 'all';
 let liveExecutionRules: LiveExecutionRules = {
@@ -2790,6 +2800,10 @@ function loadState() {
     repairedState = true;
   }
   if (Array.isArray(data.selectedTimeframes)) selectedTimeframes = new Set(data.selectedTimeframes.filter((timeframe): timeframe is Timeframe => SUPPORTED_TIMEFRAMES.includes(timeframe)));
+  if (selectedTimeframes.size === 0) {
+    selectedTimeframes = new Set(DEFAULT_SELECTED_TIMEFRAMES);
+    repairedState = true;
+  }
   const normalizedExitModes = Array.isArray(data.selectedExitModes)
     ? data.selectedExitModes.map((mode: string) => mode === 'precision' ? 'quick' : mode === 'runner' ? 'extended' : mode === 'adaptive' ? 'balanced' : mode).filter((mode): mode is ExitMode => mode === 'quick' || mode === 'extended' || mode === 'balanced')
     : [];
@@ -3650,7 +3664,7 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
   const wallet = await readBinanceWalletSummary();
   const futuresPositions = filters.marketFilter === 'spot'
     ? new Map<string, BinanceFuturesPosition>()
-    : await readOpenFuturesPositions().catch(() => new Map<string, BinanceFuturesPosition>());
+    : await readOpenFuturesPositions();
   const futuresOpenOrders = filters.marketFilter === 'spot' ? [] : await readFuturesOpenOrders();
   const spotOpenOrders = filters.marketFilter === 'futures' ? [] : await readSpotOpenOrders();
   const futuresIncomeRows = filters.marketFilter === 'spot' ? [] : await readFuturesIncomeRows(filters.rangeStart, filters.rangeEnd);
@@ -3691,9 +3705,10 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
     const roiPct = metrics?.roiPct ?? null;
     const notional = metrics?.notional ?? Math.abs(Number(position.notional ?? 0));
     const allocationPct = wallet.futuresTotalUsdt > 0 ? (notional / wallet.futuresTotalUsdt) * 100 : 0;
+    const rowId = signal.id || stablePortfolioRowId(`open:futures:${symbol}:${side}`);
     rows.push({
-      id: signal.id,
-      label: formatTradeIdLabel(signal.id),
+      id: rowId,
+      label: formatTradeIdLabel(rowId),
       symbol,
       strategyName: signal.strategyName,
       status: 'OPEN',
@@ -3785,9 +3800,10 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
     const entry = buyQty > 0 ? buyQuote / buyQty : balance.priceUsdt || signal.entry || 0;
     const pnlUsdt = entry > 0 ? balance.valueUsdt - (balance.total * entry) : null;
     const roiPct = entry > 0 ? ((balance.priceUsdt - entry) / entry) * 100 : null;
+    const rowId = signal.id || stablePortfolioRowId(`open:spot:${symbol}:LONG`);
     rows.push({
-      id: signal.id,
-      label: formatTradeIdLabel(signal.id),
+      id: rowId,
+      label: formatTradeIdLabel(rowId),
       symbol,
       strategyName: signal.strategyName,
       status: 'OPEN',
@@ -4848,6 +4864,35 @@ async function loadFuturesSymbols() {
     });
 }
 
+function fallbackSymbolsFromTickers(source: Map<string, PriceTicker>, market: TradingVenue): SymbolInfo[] {
+  return [...source.values()]
+    .filter(ticker => ticker.symbol.endsWith('USDT') && ticker.price > 0 && ticker.quoteVolume > 0)
+    .map(ticker => ({
+      symbol: ticker.symbol,
+      baseAsset: ticker.symbol.slice(0, -4),
+      quoteAsset: 'USDT',
+      status: 'TRADING',
+      contractType: market === 'futures' ? 'PERPETUAL' : undefined,
+      minNotional: 5
+    }));
+}
+
+function ensureSymbolUniversesFromTickers() {
+  let repaired = false;
+  if (symbols.length === 0 && tickers.size > 0) {
+    symbols = fallbackSymbolsFromTickers(tickers, 'spot');
+    scannerUniverse = symbols.map(symbol => symbol.symbol);
+    repaired = symbols.length > 0;
+    if (repaired) console.warn(`[startup] rebuilt spot symbol universe from ${symbols.length} live tickers`);
+  }
+  if (futuresSymbols.length === 0 && futuresTickers.size > 0) {
+    futuresSymbols = fallbackSymbolsFromTickers(futuresTickers, 'futures');
+    repaired = futuresSymbols.length > 0 || repaired;
+    if (futuresSymbols.length > 0) console.warn(`[startup] rebuilt futures symbol universe from ${futuresSymbols.length} live tickers`);
+  }
+  if (repaired) invalidateComputedCaches();
+}
+
 async function fetchCandles(symbol: string, interval: Timeframe, market: TradingVenue, limit = CANDLE_LIMIT_DEFAULT): Promise<Candle[]> {
   const safeLimit = Math.max(50, Math.min(CANDLE_LIMIT_CHART, Math.floor(limit)));
   const key = `${market}:${symbol}:${interval}:${safeLimit}`;
@@ -5350,7 +5395,7 @@ async function scanMarket() {
 function getRotatingScanUniverse(source: Map<string, PriceTicker>, market: TradingVenue) {
   const tradableSymbols = new Set((market === 'futures' ? futuresSymbols : symbols).map(symbol => symbol.symbol));
   return [...source.values()]
-    .filter(ticker => ticker.symbol.endsWith('USDT') && tradableSymbols.has(ticker.symbol))
+    .filter(ticker => ticker.symbol.endsWith('USDT') && (tradableSymbols.size === 0 || tradableSymbols.has(ticker.symbol)))
     .sort((left, right) => right.quoteVolume - left.quoteVolume || left.symbol.localeCompare(right.symbol));
 }
 
@@ -5748,6 +5793,7 @@ app.get('/api/strategies', (_req, res) => res.json({ strategies, selected: [...s
 app.post('/api/strategies/select', requireAdmin, (req, res) => {
   selectedStrategies = new Set((req.body.strategyIds ?? []).filter((id: string) => strategies.some(s => s.id === id)));
   selectedTimeframes = new Set((req.body.timeframes ?? ['5m', '10m', '15m']).filter((x: Timeframe) => SUPPORTED_TIMEFRAMES.includes(x)));
+  if (selectedTimeframes.size === 0) selectedTimeframes = new Set(DEFAULT_SELECTED_TIMEFRAMES);
   selectedMarketScope = req.body.marketScope === 'spot' || req.body.marketScope === 'futures' || req.body.marketScope === 'all' ? req.body.marketScope : selectedMarketScope;
   const requestedExitModes = Array.isArray(req.body.exitModes) ? req.body.exitModes : [req.body.exitMode].filter(Boolean);
   const normalizedExitModes = requestedExitModes
@@ -5781,7 +5827,7 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
       signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
-    if (cached && Date.now() - cached.createdAt < 0) {
+    if (cached && Date.now() - cached.createdAt < 3000) {
       res.json(cached.payload);
       return;
     }
@@ -5961,7 +6007,7 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
       signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
-    if (cached && Date.now() - cached.createdAt < 0) {
+    if (cached && Date.now() - cached.createdAt < 3000) {
       res.json(cached.payload);
       return;
     }
@@ -6508,6 +6554,7 @@ async function initializeRuntime() {
   connectBinanceFutures();
   await runStartupStep('spot ticker poll', pollTickersFallback);
   await runStartupStep('futures ticker poll', pollFuturesTickersFallback);
+  ensureSymbolUniversesFromTickers();
   await runStartupStep('inactive open signal cleanup', async () => closeInactiveMarketSignals());
   await runStartupStep('market scan', scanMarket);
   setInterval(pollTickersFallback, 5000);

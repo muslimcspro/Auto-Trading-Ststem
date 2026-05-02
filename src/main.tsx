@@ -349,6 +349,7 @@ const defaultLiveRuleToggles: LiveRulesPayload['ruleToggles'] = {
 
 type TradingVenue = MarketMode;
 const allTimeframes: Timeframe[] = ['5m', '10m', '15m', '1h', '2h', '4h', '1d'];
+const defaultSelectedTimeframes: Timeframe[] = ['5m', '10m', '15m'];
 
 const normalizeBinanceConnection = (value?: Partial<BinanceConnection> | null): BinanceConnection => ({
   connected: Boolean(value?.connected),
@@ -623,7 +624,7 @@ function App() {
       setFuturesLosers(intel.binance.futuresLosers ?? []);
       setStrategies(st.strategies);
       setSelected(new Set(st.selected));
-      setTimeframes(new Set(st.timeframes));
+      setTimeframes(new Set(st.timeframes?.length ? st.timeframes : defaultSelectedTimeframes));
       setExitModes(new Set(st.exitModes?.length ? st.exitModes : ['balanced']));
       setStrategyMarketScope(st.marketScope);
       setSignals(sig.signals);
@@ -768,14 +769,15 @@ function App() {
   };
 
   const saveSelection = async (nextSelected = selected, nextTimeframes = timeframes, nextExitModes = exitModes, nextMarketScope = strategyMarketScope) => {
+    const safeTimeframes = nextTimeframes.size > 0 ? nextTimeframes : new Set(defaultSelectedTimeframes);
     setSelected(new Set(nextSelected));
-    setTimeframes(new Set(nextTimeframes));
+    setTimeframes(new Set(safeTimeframes));
     setExitModes(new Set(nextExitModes));
     setStrategyMarketScope(nextMarketScope);
     await api('/api/strategies/select', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ strategyIds: [...nextSelected], timeframes: [...nextTimeframes], exitModes: [...nextExitModes], marketScope: nextMarketScope })
+      body: JSON.stringify({ strategyIds: [...nextSelected], timeframes: [...safeTimeframes], exitModes: [...nextExitModes], marketScope: nextMarketScope })
     });
   };
 
@@ -2408,12 +2410,7 @@ function AutoTradePage({
             setLivePortfolioSummary(response);
           }
         })
-        .catch(() => {
-          if (!cancelled) {
-            setLivePortfolioData(null);
-            setLivePortfolioSummary(null);
-          }
-        });
+        .catch(() => {});
     };
     const fetchLivePortfolio = () => {
       if (firstLoad) setLivePortfolioLoading(true);
@@ -2425,7 +2422,7 @@ function AutoTradePage({
           }
         })
         .catch(() => {
-          if (!cancelled) {
+          if (!cancelled && firstLoad) {
             setLivePortfolioSummary(null);
             setLivePortfolioData(null);
           }
