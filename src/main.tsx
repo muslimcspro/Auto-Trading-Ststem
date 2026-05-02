@@ -1311,7 +1311,7 @@ function HomePage({
         </div>
       </div>
       <div className="price-strip home-top-market-strip">
-        {activeTopMarkets.map(item => <button key={`${marketMode}-${item.symbol}`} type="button" className="price-card home-top-market-card" onClick={() => openSymbolChart(item.symbol, marketMode)}>
+        {activeTopMarkets.slice(0, 4).map(item => <button key={`${marketMode}-${item.symbol}`} type="button" className="price-card home-top-market-card" onClick={() => openSymbolChart(item.symbol, marketMode)}>
           <div className="price-card-head">
             <span>{item.symbol}</span>
             <small>{marketMode === 'spot' ? 'Spot' : 'Futures'}</small>
