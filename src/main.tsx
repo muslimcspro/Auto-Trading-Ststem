@@ -805,7 +805,6 @@ function App() {
           <span className="shell-brand-mark"><TrendingUp size={20} /></span>
           <div>
             <strong>Auto Trading</strong>
-            <small>Live crypto command center</small>
           </div>
         </div>
         <nav className="shell-nav" aria-label="Primary navigation">
@@ -1287,14 +1286,12 @@ function HomePage({
             <Bot size={22} />
             <span>
               <strong>Join Auto Trading</strong>
-              <small>Member access</small>
             </span>
           </button>
           <a className="home-cta-secondary" href="https://t.me/Autotradingbot71" target="_blank" rel="noreferrer">
             <Send size={22} />
             <span>
               <strong>Join Free Trade Alerts</strong>
-              <small>@Autotradingbot71</small>
             </span>
           </a>
         </div>
@@ -2489,6 +2486,7 @@ function AutoTradePage({
     : venueMode === 'spot'
       ? binanceWallet.totalValueUsdt
       : binanceWallet.futuresTotalUsdt;
+  const binanceWalletTotalUsdt = binanceWallet.totalValueUsdt + binanceWallet.futuresTotalUsdt;
   const capitalValue = autoMode === 'live' ? liveCapitalValue : Number(capital) || 0;
   const visibleBinanceBalances = useMemo(
     () => hideSmallBinanceAssets ? binanceWallet.balances.filter(balance => balance.valueUsdt >= 1) : binanceWallet.balances,
@@ -4392,14 +4390,14 @@ function AutoTradePage({
               </div>
             </div>
             <div className="binance-wallet-hero">
-              {visibleBinanceWalletPanels.map((panel, index) => <article key={panel.id} className={index === 0 ? 'primary' : ''}>
+              <article className="primary">
+                <span>Wallet Total</span>
+                <strong>{`${fmtMoney(binanceWalletTotalUsdt)} USDT`}</strong>
+              </article>
+              {visibleBinanceWalletPanels.map(panel => <article key={panel.id}>
                 <span>{panel.label}</span>
                 <strong>{`${fmtMoney(panel.value)} USDT`}</strong>
               </article>)}
-              <article>
-                <span>Wallet Total</span>
-                <strong>{`${fmtMoney(binanceWallet.totalValueUsdt)} USDT`}</strong>
-              </article>
               <article>
                 <span>24H Change</span>
                 <strong className={binanceWallet.pnl24hUsdt >= 0 ? 'good' : 'bad'}>{`${binanceWallet.pnl24hUsdt >= 0 ? '+' : '-'}$${fmtMoney(Math.abs(binanceWallet.pnl24hUsdt))}`}</strong>
@@ -5890,7 +5888,7 @@ function PerformanceChart({
   const [ledgerScoreFilter, setLedgerScoreFilter] = useState<ScoreFilter>('all');
   const [ledgerTradeQuery, setLedgerTradeQuery] = useState('');
   const [chartTrade, setChartTrade] = useState<TradeChartTrade | null>(null);
-  const [ledgerRange, setLedgerRange] = useState<PerformanceRange>('all');
+  const [ledgerRange, setLedgerRange] = useState<PerformanceRange>('24h');
   const [ledgerCustomFrom, setLedgerCustomFrom] = useState(() => toDateInput(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const [ledgerCustomTo, setLedgerCustomTo] = useState(() => toDateInput(Date.now()));
   const [focusedTradeId, setFocusedTradeId] = useState<number | null>(null);

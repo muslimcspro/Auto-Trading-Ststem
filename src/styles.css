@@ -15126,3 +15126,70 @@ video {
     display: none !important;
   }
 }
+
+/* Live polish: centered desktop nav and compact Binance wallet summary */
+.shell-header {
+  grid-template-columns: minmax(270px, 1fr) auto minmax(270px, 1fr) !important;
+}
+
+.shell-brand {
+  justify-self: start;
+}
+
+.shell-nav {
+  justify-self: center;
+  justify-content: center !important;
+}
+
+.shell-tools {
+  justify-self: end;
+}
+
+.binance-wallet-hero,
+.page-auto-trade .binance-wallet-hero {
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  align-items: stretch;
+}
+
+.binance-wallet-hero article,
+.page-auto-trade .binance-wallet-hero article {
+  min-height: 74px;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.binance-wallet-hero strong,
+.page-auto-trade .binance-wallet-hero strong {
+  font-size: clamp(14px, 1.08vw, 18px);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1180px) {
+  .shell-header {
+    grid-template-columns: minmax(220px, 1fr) auto !important;
+  }
+
+  .shell-nav {
+    justify-self: stretch;
+  }
+
+  .binance-wallet-hero,
+  .page-auto-trade .binance-wallet-hero {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 820px) {
+  .shell-header {
+    grid-template-columns: 1fr !important;
+  }
+
+  .shell-nav {
+    justify-self: auto;
+  }
+
+  .binance-wallet-hero,
+  .page-auto-trade .binance-wallet-hero {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
