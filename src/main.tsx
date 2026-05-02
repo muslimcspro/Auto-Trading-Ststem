@@ -9,7 +9,6 @@ type Timeframe = '5m' | '10m' | '15m' | '1h' | '2h' | '4h' | '1d';
 type Side = 'LONG' | 'SHORT';
 type ExitMode = 'balanced' | 'quick' | 'extended';
 type Ticker = { symbol: string; price: number; change24h: number; quoteVolume: number; eventTime: number };
-type ChartCandle = { openTime: number; open: number; high: number; low: number; close: number; volume: number; closeTime: number };
 type SymbolInfo = { symbol: string; baseAsset: string; quoteAsset: string };
 type MarketMode = 'spot' | 'futures';
 type ExecutionVenueMode = MarketMode | 'both';
@@ -1017,8 +1016,6 @@ function parseNotificationMessage(message: string) {
   };
 }
 
-const tradeChartCache = new Map<string, ChartCandle[]>();
-
 function getTradeChartLevels(trade: TradeChartTrade) {
   const takeProfit = trade.takeProfit ?? (trade.side === 'LONG'
     ? trade.entry * (1 + trade.expectedProfitPct / 100)
@@ -1029,131 +1026,53 @@ function getTradeChartLevels(trade: TradeChartTrade) {
   return { entry: trade.entry, takeProfit, stopLoss };
 }
 
+function tradingViewSymbolForTrade(trade: TradeChartTrade) {
+  const suffix = trade.market === 'futures' ? '.P' : '';
+  return `BINANCE:${trade.symbol}${suffix}`;
+}
+
+function tradingViewInterval(timeframe: Timeframe) {
+  return ({
+    '5m': '5',
+    '10m': '10',
+    '15m': '15',
+    '1h': '60',
+    '2h': '120',
+    '4h': '240',
+    '1d': 'D'
+  } as Record<Timeframe, string>)[timeframe];
+}
+
+function tradingViewEmbedUrl(trade: TradeChartTrade) {
+  const params = new URLSearchParams({
+    frameElementId: `tradingview_${trade.id}`,
+    symbol: tradingViewSymbolForTrade(trade),
+    interval: tradingViewInterval(trade.timeframe),
+    hidetoptoolbar: '0',
+    hidesidetoolbar: '0',
+    symboledit: '1',
+    saveimage: '1',
+    toolbarbg: '131722',
+    studies: '[]',
+    theme: 'dark',
+    style: '1',
+    timezone: 'Etc/UTC',
+    withdateranges: '1',
+    hideideas: '1',
+    studies_overrides: '{}',
+    overrides: '{}',
+    enabled_features: '[]',
+    disabled_features: '[]',
+    locale: 'en'
+  });
+  return `https://s.tradingview.com/widgetembed/?${params.toString()}`;
+}
+
 function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; onClose: () => void }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<any>(null);
-  const [candles, setCandles] = useState<ChartCandle[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!trade) return;
-    let cancelled = false;
-    const key = `${trade.market}:${trade.symbol}:${trade.timeframe}`;
-    const fetchLiveCandles = (initial = false) => {
-      if (initial) setLoading(true);
-      setError('');
-      api<{ ok: boolean; candles: ChartCandle[] }>(`/api/chart?symbol=${encodeURIComponent(trade.symbol)}&market=${trade.market}&interval=${trade.timeframe}&limit=240&ts=${Date.now()}`)
-        .then(response => {
-          if (cancelled) return;
-          tradeChartCache.set(key, response.candles);
-          setCandles(response.candles);
-        })
-        .catch(() => {
-          if (!cancelled) setError('Unable to load live chart candles.');
-        })
-        .finally(() => {
-          if (!cancelled && initial) setLoading(false);
-        });
-    };
-    const cached = tradeChartCache.get(key);
-    if (cached) setCandles(cached);
-    fetchLiveCandles(!cached);
-    const intervalId = window.setInterval(() => fetchLiveCandles(false), 10000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [trade]);
-
-  useEffect(() => {
-    if (!trade || !containerRef.current || candles.length === 0) return;
-    let disposed = false;
-    let resizeObserver: ResizeObserver | null = null;
-    const container = containerRef.current;
-    const levels = getTradeChartLevels(trade);
-
-    import('lightweight-charts').then(module => {
-      if (disposed || !containerRef.current) return;
-      const { createChart, CandlestickSeries, ColorType, LineStyle } = module as any;
-      const chart = createChart(container, {
-        autoSize: true,
-        layout: {
-          background: { type: ColorType.Solid, color: '#141414' },
-          textColor: '#d1d4dc',
-          attributionLogo: false
-        },
-        grid: {
-          vertLines: { color: 'rgba(255, 255, 255, 0.06)' },
-          horzLines: { color: 'rgba(255, 255, 255, 0.06)' }
-        },
-        rightPriceScale: { borderColor: 'rgba(255, 255, 255, 0.12)' },
-        timeScale: { borderColor: 'rgba(255, 255, 255, 0.12)', timeVisible: true, secondsVisible: false },
-        crosshair: {
-          mode: 1,
-          vertLine: { color: 'rgba(209, 212, 220, 0.32)', width: 1, style: LineStyle.Solid },
-          horzLine: { color: 'rgba(209, 212, 220, 0.32)', width: 1, style: LineStyle.Solid }
-        }
-      });
-      chartRef.current = chart;
-      const series = chart.addSeries(CandlestickSeries, {
-        upColor: '#089981',
-        downColor: '#f23645',
-        borderUpColor: '#089981',
-        borderDownColor: '#f23645',
-        wickUpColor: '#089981',
-        wickDownColor: '#f23645',
-        priceLineVisible: false,
-        lastValueVisible: true
-      });
-      series.setData(candles.map(candle => ({
-        time: Math.floor(candle.openTime / 1000),
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close
-      })));
-      const isPrimaryLine = (name: 'entry' | 'takeProfit' | 'stopLoss') => {
-        if (trade.status === 'WIN') return name === 'takeProfit';
-        if (trade.status === 'LOSS') return name === 'stopLoss';
-        return name === 'entry';
-      };
-      const lineOptions = (name: 'entry' | 'takeProfit' | 'stopLoss', color: string) => ({
-        lineWidth: isPrimaryLine(name) ? 2 : 1,
-        lineStyle: LineStyle.Solid,
-        color: isPrimaryLine(name) ? color : color.replace('1)', '0.58)'),
-        axisLabelVisible: true
-      });
-      series.createPriceLine({ price: levels.entry, ...lineOptions('entry', 'rgba(56, 189, 248, 1)'), title: `Entry ${fmt(levels.entry)}` });
-      series.createPriceLine({ price: levels.takeProfit, ...lineOptions('takeProfit', 'rgba(8, 153, 129, 1)'), title: `TP ${fmt(levels.takeProfit)}` });
-      series.createPriceLine({ price: levels.stopLoss, ...lineOptions('stopLoss', 'rgba(242, 54, 69, 1)'), title: `SL ${fmt(levels.stopLoss)}` });
-      const liveClose = candles[candles.length - 1]?.close;
-      if (typeof liveClose === 'number') {
-        series.createPriceLine({
-          price: liveClose,
-          lineWidth: 1,
-          lineStyle: LineStyle.Dotted,
-          color: 'rgba(209, 212, 220, 0.46)',
-          axisLabelVisible: true,
-          title: `Live ${fmt(liveClose)}`
-        });
-      }
-      chart.timeScale().fitContent();
-      resizeObserver = new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth, height: container.clientHeight }));
-      resizeObserver.observe(container);
-    });
-
-    return () => {
-      disposed = true;
-      resizeObserver?.disconnect();
-      chartRef.current?.remove?.();
-      chartRef.current = null;
-    };
-  }, [candles, trade]);
-
   if (!trade) return null;
   const levels = getTradeChartLevels(trade);
   const pnl = trade.pnlLabel ?? (typeof trade.pnl === 'number' ? `${trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}%` : '--');
+  const tvSymbol = tradingViewSymbolForTrade(trade);
   return <div className="trade-chart-overlay" role="dialog" aria-modal="true" onMouseDown={event => {
     if (event.target === event.currentTarget) onClose();
   }}>
@@ -1173,11 +1092,15 @@ function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; on
         <span><b>Entry</b><em>{fmt(levels.entry)}</em></span>
         <span><b>TP</b><em>{fmt(levels.takeProfit)}</em></span>
         <span><b>SL</b><em>{fmt(levels.stopLoss)}</em></span>
-        <span><b>Duration</b><em>{formatDuration(trade.openedAt, trade.closedAt)}</em></span>
+        <span><b>TradingView</b><em>{tvSymbol}</em></span>
       </div>
-      <div className="trade-chart-canvas" ref={containerRef}>
-        {loading && <div className="trade-chart-state">Loading TradingView chart...</div>}
-        {error && <div className="trade-chart-state error">{error}</div>}
+      <div className="trade-chart-canvas tradingview-chart-canvas">
+        <iframe
+          key={`${trade.id}:${tvSymbol}:${trade.timeframe}`}
+          title={`${trade.symbol} TradingView chart`}
+          src={tradingViewEmbedUrl(trade)}
+          allowFullScreen
+        />
       </div>
     </section>
   </div>;
