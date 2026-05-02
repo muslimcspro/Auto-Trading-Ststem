@@ -88,9 +88,17 @@ type Notification = { id: number; time: number; title: string; message: string; 
 type LedgerSimulationSettings = {
   enabled: boolean;
   startingCapitalUsdt: number;
+  spotCapitalUsdt: number;
+  futuresCapitalUsdt: number;
   reserveRatio: number;
+  spotReserveRatio: number;
+  futuresReserveRatio: number;
   maxOpenTrades: number;
+  spotMaxOpenTrades: number;
+  futuresMaxOpenTrades: number;
   minNotionalUsdt: number;
+  spotMinNotionalUsdt: number;
+  futuresMinNotionalUsdt: number;
   allocationMethod: 'equal' | 'available';
   riskPerTradePct: number;
   spotFeePct: number;
@@ -110,7 +118,10 @@ type LedgerSimulationSnapshot = {
   committedCapital: number;
   availableCapital: number;
   openAccepted: number;
+  spot?: LedgerVenueSimulationSnapshot;
+  futures?: LedgerVenueSimulationSnapshot;
 };
+type LedgerVenueSimulationSnapshot = Omit<LedgerSimulationSnapshot, 'spot' | 'futures'>;
 type TradeChartTrade = {
   id: number;
   symbol: string;
@@ -6118,10 +6129,14 @@ function PerformanceChart({
     const ledgerPnlCards = useMemo(() => {
       const openPnl = acceptedTradeRows.filter(row => row.status === 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
       const closedPnl = acceptedTradeRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
+      const spotPnl = acceptedTradeRows.filter(row => row.market === 'spot').reduce((sum, row) => sum + row.pnl, 0);
+      const futuresPnl = acceptedTradeRows.filter(row => row.market === 'futures').reduce((sum, row) => sum + row.pnl, 0);
       return {
         openPnl,
         closedPnl,
-        netPnl: openPnl + closedPnl
+        netPnl: openPnl + closedPnl,
+        spotPnl,
+        futuresPnl
       };
     }, [acceptedTradeRows]);
   const filterCounts = useMemo(() => getSignalFilterCounts(ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter), [ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter]);
@@ -6359,17 +6374,21 @@ function PerformanceChart({
           <div>
             <span>Ledger Simulation</span>
             <strong>{`${(ledgerSimulationSnapshot?.currentCapital ?? ledgerSimulationDraft.startingCapitalUsdt).toFixed(2)} USDT`}</strong>
-            <small>{`Available ${(ledgerSimulationSnapshot?.availableCapital ?? 0).toFixed(2)} USDT • Open ${ledgerSimulationSnapshot?.openAccepted ?? 0}/${ledgerSimulationDraft.maxOpenTrades}`}</small>
+            <small>{`Spot ${(ledgerSimulationSnapshot?.spot?.availableCapital ?? 0).toFixed(2)} free • Futures ${(ledgerSimulationSnapshot?.futures?.availableCapital ?? 0).toFixed(2)} free`}</small>
           </div>
           <button type="button" className="primary small" disabled={ledgerSimulationSaving || JSON.stringify(ledgerSimulationSettings) === JSON.stringify(ledgerSimulationDraft)} onClick={saveLedgerSimulation}>
             {ledgerSimulationSaving ? 'Saving' : 'Apply'}
           </button>
         </div>
         <div className="ledger-simulation-grid">
-          <label><span>Capital</span><input type="number" min={5} step={5} value={ledgerSimulationDraft.startingCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, startingCapitalUsdt: Number(event.target.value) })} /></label>
-          <label><span>Reserve %</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.reserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, reserveRatio: Number(event.target.value) })} /></label>
-          <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.maxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, maxOpenTrades: Number(event.target.value) })} /></label>
-          <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.minNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, minNotionalUsdt: Number(event.target.value) })} /></label>
+          <label><span>Spot Capital</span><input type="number" min={0} step={5} value={ledgerSimulationDraft.spotCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotCapitalUsdt: Number(event.target.value) })} /></label>
+          <label><span>Fut Capital</span><input type="number" min={0} step={5} value={ledgerSimulationDraft.futuresCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresCapitalUsdt: Number(event.target.value) })} /></label>
+          <label><span>Spot Reserve</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.spotReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotReserveRatio: Number(event.target.value) })} /></label>
+          <label><span>Fut Reserve</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.futuresReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresReserveRatio: Number(event.target.value) })} /></label>
+          <label><span>Spot Max</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.spotMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMaxOpenTrades: Number(event.target.value) })} /></label>
+          <label><span>Fut Max</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.futuresMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMaxOpenTrades: Number(event.target.value) })} /></label>
+          <label><span>Spot Min</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.spotMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMinNotionalUsdt: Number(event.target.value) })} /></label>
+          <label><span>Fut Min</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.futuresMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMinNotionalUsdt: Number(event.target.value) })} /></label>
           <label><span>Risk %</span><input type="number" min={0.1} max={20} step={0.1} value={ledgerSimulationDraft.riskPerTradePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, riskPerTradePct: Number(event.target.value) })} /></label>
           <label><span>Slip %</span><input type="number" min={0} max={5} step={0.01} value={ledgerSimulationDraft.slippagePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, slippagePct: Number(event.target.value) })} /></label>
           <label><span>Fut Lev</span><input type="number" min={1} max={20} step={1} value={ledgerSimulationDraft.futuresLeverage} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresLeverage: Number(event.target.value) })} /></label>
@@ -6418,7 +6437,7 @@ function PerformanceChart({
             <button type="button" className="trade-extreme-card" onClick={() => { setFocusedTradeId(null); setLedgerStatusFilter('all'); resetLedgerScroll(); }}>
               <span>Net PnL</span>
               <strong className={ledgerPnlCards.netPnl >= 0 ? 'good' : 'bad'}>{`${ledgerPnlCards.netPnl >= 0 ? '+' : ''}${ledgerPnlCards.netPnl.toFixed(2)}%`}</strong>
-              <small>{ledgerPnlCards.netPnl >= 0 ? 'Net profit across open and closed trades' : 'Net loss across open and closed trades'}</small>
+              <small>{`Spot ${ledgerPnlCards.spotPnl >= 0 ? '+' : ''}${ledgerPnlCards.spotPnl.toFixed(2)}% • Futures ${ledgerPnlCards.futuresPnl >= 0 ? '+' : ''}${ledgerPnlCards.futuresPnl.toFixed(2)}%`}</small>
             </button>
             <button type="button" className="trade-extreme-card" onClick={cycleLedgerModeFilter}>
               <span>Mode</span>

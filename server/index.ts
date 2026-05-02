@@ -175,9 +175,17 @@ type LiveExecutionRules = {
 type LedgerSimulationSettings = {
   enabled: boolean;
   startingCapitalUsdt: number;
+  spotCapitalUsdt: number;
+  futuresCapitalUsdt: number;
   reserveRatio: number;
+  spotReserveRatio: number;
+  futuresReserveRatio: number;
   maxOpenTrades: number;
+  spotMaxOpenTrades: number;
+  futuresMaxOpenTrades: number;
   minNotionalUsdt: number;
+  spotMinNotionalUsdt: number;
+  futuresMinNotionalUsdt: number;
   allocationMethod: 'equal' | 'available';
   riskPerTradePct: number;
   spotFeePct: number;
@@ -950,9 +958,17 @@ let liveExecutionRules: LiveExecutionRules = {
 let ledgerSimulationSettings: LedgerSimulationSettings = {
   enabled: true,
   startingCapitalUsdt: 100,
+  spotCapitalUsdt: 50,
+  futuresCapitalUsdt: 50,
   reserveRatio: 10,
+  spotReserveRatio: 10,
+  futuresReserveRatio: 10,
   maxOpenTrades: 10,
+  spotMaxOpenTrades: 5,
+  futuresMaxOpenTrades: 5,
   minNotionalUsdt: 5,
+  spotMinNotionalUsdt: 5,
+  futuresMinNotionalUsdt: 5,
   allocationMethod: 'equal',
   riskPerTradePct: 2,
   spotFeePct: 0.2,
@@ -1718,12 +1734,29 @@ function buildLiveExecutionRulesPatch(input: Partial<LiveExecutionRules>): LiveE
 }
 
 function buildLedgerSimulationSettingsPatch(input: Partial<LedgerSimulationSettings>): LedgerSimulationSettings {
+  const legacyCapital = toFiniteNumber(input.startingCapitalUsdt, ledgerSimulationSettings.startingCapitalUsdt);
+  const defaultSpotCapital = Number.isFinite(input.spotCapitalUsdt) ? ledgerSimulationSettings.spotCapitalUsdt : legacyCapital / 2;
+  const defaultFuturesCapital = Number.isFinite(input.futuresCapitalUsdt) ? ledgerSimulationSettings.futuresCapitalUsdt : legacyCapital / 2;
+  const spotCapitalUsdt = Math.max(0, Math.min(1_000_000, toFiniteNumber(input.spotCapitalUsdt, defaultSpotCapital)));
+  const futuresCapitalUsdt = Math.max(0, Math.min(1_000_000, toFiniteNumber(input.futuresCapitalUsdt, defaultFuturesCapital)));
+  const totalCapital = Math.max(5, spotCapitalUsdt + futuresCapitalUsdt);
+  const legacyReserve = toFiniteNumber(input.reserveRatio, ledgerSimulationSettings.reserveRatio);
+  const legacyMaxOpen = Math.max(1, Math.floor(toFiniteNumber(input.maxOpenTrades, ledgerSimulationSettings.maxOpenTrades)));
+  const legacyMinOrder = toFiniteNumber(input.minNotionalUsdt, ledgerSimulationSettings.minNotionalUsdt);
   return {
     enabled: input.enabled !== false,
-    startingCapitalUsdt: Math.max(5, Math.min(1_000_000, toFiniteNumber(input.startingCapitalUsdt, ledgerSimulationSettings.startingCapitalUsdt))),
-    reserveRatio: Math.max(0, Math.min(95, toFiniteNumber(input.reserveRatio, ledgerSimulationSettings.reserveRatio))),
-    maxOpenTrades: Math.max(1, Math.min(200, Math.floor(toFiniteNumber(input.maxOpenTrades, ledgerSimulationSettings.maxOpenTrades)))),
-    minNotionalUsdt: Math.max(1, Math.min(500, toFiniteNumber(input.minNotionalUsdt, ledgerSimulationSettings.minNotionalUsdt))),
+    startingCapitalUsdt: totalCapital,
+    spotCapitalUsdt,
+    futuresCapitalUsdt,
+    reserveRatio: Math.max(0, Math.min(95, legacyReserve)),
+    spotReserveRatio: Math.max(0, Math.min(95, toFiniteNumber(input.spotReserveRatio, legacyReserve))),
+    futuresReserveRatio: Math.max(0, Math.min(95, toFiniteNumber(input.futuresReserveRatio, legacyReserve))),
+    maxOpenTrades: Math.max(1, Math.min(400, Math.floor(toFiniteNumber(input.maxOpenTrades, legacyMaxOpen)))),
+    spotMaxOpenTrades: Math.max(1, Math.min(200, Math.floor(toFiniteNumber(input.spotMaxOpenTrades, Math.max(1, Math.floor(legacyMaxOpen / 2)))))),
+    futuresMaxOpenTrades: Math.max(1, Math.min(200, Math.floor(toFiniteNumber(input.futuresMaxOpenTrades, Math.max(1, Math.ceil(legacyMaxOpen / 2)))))),
+    minNotionalUsdt: Math.max(1, Math.min(500, legacyMinOrder)),
+    spotMinNotionalUsdt: Math.max(1, Math.min(500, toFiniteNumber(input.spotMinNotionalUsdt, legacyMinOrder))),
+    futuresMinNotionalUsdt: Math.max(1, Math.min(500, toFiniteNumber(input.futuresMinNotionalUsdt, legacyMinOrder))),
     allocationMethod: input.allocationMethod === 'available' ? 'available' : 'equal',
     riskPerTradePct: Math.max(0.1, Math.min(20, toFiniteNumber(input.riskPerTradePct, ledgerSimulationSettings.riskPerTradePct))),
     spotFeePct: Math.max(0, Math.min(2, toFiniteNumber(input.spotFeePct, ledgerSimulationSettings.spotFeePct))),
@@ -1762,6 +1795,22 @@ function ledgerFeeRatePct(market: TradingVenue) {
   return market === 'futures' ? ledgerSimulationSettings.futuresFeePct : ledgerSimulationSettings.spotFeePct;
 }
 
+function ledgerVenueCapital(market: TradingVenue) {
+  return market === 'futures' ? ledgerSimulationSettings.futuresCapitalUsdt : ledgerSimulationSettings.spotCapitalUsdt;
+}
+
+function ledgerVenueReserveRatio(market: TradingVenue) {
+  return market === 'futures' ? ledgerSimulationSettings.futuresReserveRatio : ledgerSimulationSettings.spotReserveRatio;
+}
+
+function ledgerVenueMaxOpenTrades(market: TradingVenue) {
+  return market === 'futures' ? ledgerSimulationSettings.futuresMaxOpenTrades : ledgerSimulationSettings.spotMaxOpenTrades;
+}
+
+function ledgerVenueMinNotional(market: TradingVenue) {
+  return market === 'futures' ? ledgerSimulationSettings.futuresMinNotionalUsdt : ledgerSimulationSettings.spotMinNotionalUsdt;
+}
+
 function ledgerSignalPnlUsdt(signal: TradeSignal, marketPrice?: number) {
   if (!countsInLedgerSimulation(signal)) return 0;
   const price = signal.status === 'OPEN'
@@ -1776,27 +1825,43 @@ function ledgerSignalPnlUsdt(signal: TradeSignal, marketPrice?: number) {
 }
 
 function ledgerSignalPnlPct(signal: TradeSignal, marketPrice?: number) {
-  const capital = Math.max(1, signal.ledgerStartingCapitalUsdt ?? ledgerSimulationSettings.startingCapitalUsdt);
+  const capital = Math.max(1, signal.ledgerStartingCapitalUsdt ?? (ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt));
   return (ledgerSignalPnlUsdt(signal, marketPrice) / capital) * 100;
 }
 
-function ledgerCapitalSnapshot(excludeSignalId?: number) {
-  const startingCapital = ledgerSimulationSettings.startingCapitalUsdt;
-  const accepted = signals.filter(signal => signal.id !== excludeSignalId && countsInLedgerSimulation(signal));
+function ledgerVenueCapitalSnapshot(market: TradingVenue, excludeSignalId?: number) {
+  const startingCapital = ledgerVenueCapital(market);
+  const accepted = signals.filter(signal => signal.id !== excludeSignalId && signal.market === market && countsInLedgerSimulation(signal));
   const realizedPnl = accepted
     .filter(signal => signal.status !== 'OPEN')
     .reduce((sum, signal) => sum + ledgerSignalPnlUsdt(signal), 0);
   const currentCapital = Math.max(0, startingCapital + realizedPnl);
-  const deployableCapital = currentCapital * (1 - ledgerSimulationSettings.reserveRatio / 100);
+  const deployableCapital = currentCapital * (1 - ledgerVenueReserveRatio(market) / 100);
   const open = accepted.filter(signal => signal.status === 'OPEN');
   const committedCapital = open.reduce((sum, signal) => sum + Math.max(0, signal.ledgerAllocationUsdt ?? 0), 0);
   return {
+    market,
     startingCapital,
     currentCapital,
     deployableCapital,
     committedCapital,
     availableCapital: Math.max(0, deployableCapital - committedCapital),
     open
+  };
+}
+
+function ledgerCapitalSnapshot(excludeSignalId?: number) {
+  const spot = ledgerVenueCapitalSnapshot('spot', excludeSignalId);
+  const futures = ledgerVenueCapitalSnapshot('futures', excludeSignalId);
+  return {
+    startingCapital: spot.startingCapital + futures.startingCapital,
+    currentCapital: spot.currentCapital + futures.currentCapital,
+    deployableCapital: spot.deployableCapital + futures.deployableCapital,
+    committedCapital: spot.committedCapital + futures.committedCapital,
+    availableCapital: spot.availableCapital + futures.availableCapital,
+    open: [...spot.open, ...futures.open],
+    spot,
+    futures
   };
 }
 
@@ -1853,8 +1918,8 @@ function rejectLedgerSimulation(signal: TradeSignal, notes: string[], score?: nu
   signal.ledgerQualityScore = Number.isFinite(score) ? score! : null;
   signal.ledgerQualityGatePassed = Boolean(gatePassed);
   signal.ledgerPnlEligible = false;
-  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.startingCapitalUsdt;
-  signal.ledgerAvailableCapitalUsdt = ledgerCapitalSnapshot(signal.id).availableCapital;
+  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt;
+  signal.ledgerAvailableCapitalUsdt = ledgerVenueCapitalSnapshot(signal.market, signal.id).availableCapital;
 }
 
 function applyLedgerSimulation(candidate: SignalCandidate) {
@@ -1865,7 +1930,7 @@ function applyLedgerSimulation(candidate: SignalCandidate) {
   signal.ledgerQualityGatePassed = qualityGatePassed;
   signal.ledgerSimulationNotes = softNotes;
   signal.ledgerPnlEligible = true;
-  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.startingCapitalUsdt;
+  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt;
 
   if (!ledgerSimulationSettings.enabled) {
     rejectLedgerSimulation(signal, ['Ledger simulation is disabled.'], candidate.score, qualityGatePassed);
@@ -1893,13 +1958,16 @@ function applyLedgerSimulation(candidate: SignalCandidate) {
     return;
   }
 
-  const snapshot = ledgerCapitalSnapshot(signal.id);
+  const snapshot = ledgerVenueCapitalSnapshot(signal.market, signal.id);
+  const totalSnapshot = ledgerCapitalSnapshot(signal.id);
   const open = snapshot.open;
-  const sameDirection = open.filter(item => item.side === signal.side);
+  const totalOpen = totalSnapshot.open;
+  const sameDirection = totalOpen.filter(item => item.side === signal.side);
   const sameMarketDirection = sameDirection.filter(item => item.market === signal.market);
-  const sameBase = open.filter(item => baseAssetFromSymbol(item.symbol) === baseAssetFromSymbol(signal.symbol));
-  if (open.length >= ledgerSimulationSettings.maxOpenTrades) {
-    rejectLedgerSimulation(signal, [`Ledger max open trades reached (${ledgerSimulationSettings.maxOpenTrades}).`], candidate.score, qualityGatePassed);
+  const sameBase = totalOpen.filter(item => baseAssetFromSymbol(item.symbol) === baseAssetFromSymbol(signal.symbol));
+  const venueMaxOpen = ledgerVenueMaxOpenTrades(signal.market);
+  if (open.length >= venueMaxOpen) {
+    rejectLedgerSimulation(signal, [`${signal.market.toUpperCase()} max open trades reached (${venueMaxOpen}).`], candidate.score, qualityGatePassed);
     return;
   }
   if (sameDirection.length >= ledgerSimulationSettings.maxSameDirectionOpen) {
@@ -1915,10 +1983,10 @@ function applyLedgerSimulation(candidate: SignalCandidate) {
     return;
   }
 
-  const minNotional = Math.max(ledgerSimulationSettings.minNotionalUsdt, rules.minNotional ?? 0);
+  const minNotional = Math.max(ledgerVenueMinNotional(signal.market), rules.minNotional ?? 0);
   const slotAllocation = ledgerSimulationSettings.allocationMethod === 'available'
     ? snapshot.availableCapital
-    : snapshot.deployableCapital / Math.max(1, ledgerSimulationSettings.maxOpenTrades);
+    : snapshot.deployableCapital / Math.max(1, venueMaxOpen);
   const allocation = Math.min(snapshot.availableCapital, Math.max(minNotional, slotAllocation));
   if (!Number.isFinite(allocation) || allocation < minNotional) {
     rejectLedgerSimulation(signal, [`Available simulated capital ${formatUsdt(snapshot.availableCapital)} is below Binance min notional ${formatUsdt(minNotional)}.`], candidate.score, qualityGatePassed);
@@ -3122,14 +3190,14 @@ function loadState() {
     if (!signal.ledgerSimulationStatus) {
       const allocation = Math.max(
         ledgerSimulationSettings.minNotionalUsdt,
-        ledgerSimulationSettings.startingCapitalUsdt * (1 - ledgerSimulationSettings.reserveRatio / 100) / ledgerSimulationSettings.maxOpenTrades
+        ledgerVenueCapital(signal.market) * (1 - ledgerVenueReserveRatio(signal.market) / 100) / ledgerVenueMaxOpenTrades(signal.market)
       );
       signal.ledgerSimulationStatus = 'accepted';
       signal.ledgerSimulationNotes = signal.ledgerSimulationNotes ?? ['Migrated legacy ledger trade into simulated capital accounting.'];
       signal.ledgerQualityScore = extractScoreFromReason(signal.reason);
       signal.ledgerQualityGatePassed = signal.ledgerQualityScore == null ? true : signal.ledgerQualityScore >= 60;
       signal.ledgerPnlEligible = true;
-      signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.startingCapitalUsdt;
+      signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt;
       signal.ledgerAllocationUsdt = signal.ledgerAllocationUsdt ?? allocation;
       signal.ledgerNotionalUsdt = signal.ledgerNotionalUsdt ?? allocation;
       signal.ledgerEstimatedFeeUsdt = signal.ledgerEstimatedFeeUsdt ?? (signal.ledgerNotionalUsdt ?? 0) * (ledgerFeeRatePct(signal.market) / 100);
@@ -6052,7 +6120,23 @@ app.get('/api/ledger-simulation', requireAuth, (_req, res) => {
       deployableCapital: snapshot.deployableCapital,
       committedCapital: snapshot.committedCapital,
       availableCapital: snapshot.availableCapital,
-      openAccepted: snapshot.open.length
+      openAccepted: snapshot.open.length,
+      spot: {
+        startingCapital: snapshot.spot.startingCapital,
+        currentCapital: snapshot.spot.currentCapital,
+        deployableCapital: snapshot.spot.deployableCapital,
+        committedCapital: snapshot.spot.committedCapital,
+        availableCapital: snapshot.spot.availableCapital,
+        openAccepted: snapshot.spot.open.length
+      },
+      futures: {
+        startingCapital: snapshot.futures.startingCapital,
+        currentCapital: snapshot.futures.currentCapital,
+        deployableCapital: snapshot.futures.deployableCapital,
+        committedCapital: snapshot.futures.committedCapital,
+        availableCapital: snapshot.futures.availableCapital,
+        openAccepted: snapshot.futures.open.length
+      }
     }
   });
 });
