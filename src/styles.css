@@ -6183,6 +6183,14 @@ video {
 .ledger-simulation-head small,
 .ledger-simulation-grid span { color: var(--muted); font-size: 12px; }
 .ledger-simulation-head strong { font-size: 22px; }
+.ledger-save-state {
+  justify-self: end;
+  align-self: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.ledger-save-state.saving { color: var(--warning); }
 .ledger-wallet-panels {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6238,6 +6246,38 @@ video {
   padding: 8px 9px;
   font: inherit;
 }
+.ledger-simulation-grid input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.ledger-simulation-grid input[type="number"]::-webkit-outer-spin-button,
+.ledger-simulation-grid input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.ledger-pnl-split {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.ledger-pnl-split article {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 5px;
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 40%),
+    color-mix(in srgb, var(--panel-strong) 90%, black);
+}
+.ledger-pnl-split span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ledger-pnl-split strong {
+  font-size: 22px;
+  line-height: 1.05;
+}
 .primary.small {
   min-height: 34px;
   padding: 7px 14px;
@@ -6252,6 +6292,7 @@ video {
   .ledger-simulation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ledger-simulation-grid.wallet-grid,
   .ledger-shared-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ledger-pnl-split { grid-template-columns: 1fr; }
 }
 .trade-extremes { display: grid; gap: 12px; }
 .trade-extremes-row { display: grid; gap: 12px; }

@@ -6021,7 +6021,7 @@ function PerformanceChart({
         .then(response => {
           if (cancelled) return;
           setLedgerSimulationSettings(response.settings);
-          setLedgerSimulationDraft(response.settings);
+          setLedgerSimulationDraft(current => current ?? response.settings);
           setLedgerSimulationSnapshot(response.snapshot);
         })
         .catch(() => undefined);
@@ -6271,14 +6271,14 @@ function PerformanceChart({
     setLedgerStatusFilter(prev => prev === 'closed' ? 'all' : 'closed');
     resetLedgerScroll();
   };
-  const saveLedgerSimulation = async () => {
-    if (!ledgerSimulationDraft) return;
+  const saveLedgerSimulation = async (nextSettings = ledgerSimulationDraft) => {
+    if (!nextSettings) return;
     setLedgerSimulationSaving(true);
     try {
       const response = await api<{ settings: LedgerSimulationSettings; snapshot: LedgerSimulationSnapshot }>('/api/ledger-simulation', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(ledgerSimulationDraft)
+        body: JSON.stringify(nextSettings)
       });
       setLedgerSimulationSettings(response.settings);
       setLedgerSimulationDraft(response.settings);
@@ -6287,6 +6287,14 @@ function PerformanceChart({
       setLedgerSimulationSaving(false);
     }
   };
+  useEffect(() => {
+    if (!ledgerSimulationDraft || !ledgerSimulationSettings) return;
+    if (JSON.stringify(ledgerSimulationDraft) === JSON.stringify(ledgerSimulationSettings)) return;
+    const timer = window.setTimeout(() => {
+      void saveLedgerSimulation(ledgerSimulationDraft);
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [ledgerSimulationDraft, ledgerSimulationSettings]);
   return <section className="panel performance-command" id="performance-command" ref={performanceCommandRef}>
     <div className="section-title dashboard-section-title performance-command-head">
       <h2>Performance Command Center</h2>
@@ -6376,9 +6384,7 @@ function PerformanceChart({
             <strong>{`${(ledgerSimulationSnapshot?.currentCapital ?? ledgerSimulationDraft.startingCapitalUsdt).toFixed(2)} USDT`}</strong>
             <small>{`Spot ${(ledgerSimulationSnapshot?.spot?.availableCapital ?? 0).toFixed(2)} free | Futures ${(ledgerSimulationSnapshot?.futures?.availableCapital ?? 0).toFixed(2)} free`}</small>
           </div>
-          <button type="button" className="primary small" disabled={ledgerSimulationSaving || JSON.stringify(ledgerSimulationSettings) === JSON.stringify(ledgerSimulationDraft)} onClick={saveLedgerSimulation}>
-            {ledgerSimulationSaving ? 'Saving' : 'Apply'}
-          </button>
+          <small className={ledgerSimulationSaving ? 'ledger-save-state saving' : 'ledger-save-state'}>{ledgerSimulationSaving ? 'Saving...' : 'Auto saved'}</small>
         </div>
         <div className="ledger-wallet-panels">
           <section className="ledger-wallet-panel ledger-wallet-spot">
@@ -6397,16 +6403,21 @@ function PerformanceChart({
               <label><span>Reserve %</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.futuresReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresReserveRatio: Number(event.target.value) })} /></label>
               <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.futuresMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMaxOpenTrades: Number(event.target.value) })} /></label>
               <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.futuresMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMinNotionalUsdt: Number(event.target.value) })} /></label>
+              <label><span>Leverage</span><input type="number" min={1} max={20} step={1} value={ledgerSimulationDraft.futuresLeverage} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresLeverage: Number(event.target.value) })} /></label>
             </div>
           </section>
         </div>
         <div className="ledger-simulation-grid ledger-shared-grid">
           <label><span>Risk %</span><input type="number" min={0.1} max={20} step={0.1} value={ledgerSimulationDraft.riskPerTradePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, riskPerTradePct: Number(event.target.value) })} /></label>
           <label><span>Slip %</span><input type="number" min={0} max={5} step={0.01} value={ledgerSimulationDraft.slippagePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, slippagePct: Number(event.target.value) })} /></label>
-          <label><span>Fut Lev</span><input type="number" min={1} max={20} step={1} value={ledgerSimulationDraft.futuresLeverage} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresLeverage: Number(event.target.value) })} /></label>
           <label><span>Allocation</span><select value={ledgerSimulationDraft.allocationMethod} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allocationMethod: event.target.value as LedgerSimulationSettings['allocationMethod'] })}><option value="equal">Equal slots</option><option value="available">Use available</option></select></label>
         </div>
       </div>}
+      <div className="ledger-pnl-split">
+        <article><span>Spot PnL</span><strong className={ledgerPnlCards.spotPnl >= 0 ? 'good' : 'bad'}>{`${ledgerPnlCards.spotPnl >= 0 ? '+' : ''}${ledgerPnlCards.spotPnl.toFixed(2)}%`}</strong></article>
+        <article><span>Futures PnL</span><strong className={ledgerPnlCards.futuresPnl >= 0 ? 'good' : 'bad'}>{`${ledgerPnlCards.futuresPnl >= 0 ? '+' : ''}${ledgerPnlCards.futuresPnl.toFixed(2)}%`}</strong></article>
+        <article><span>Total Net PnL</span><strong className={ledgerPnlCards.netPnl >= 0 ? 'good' : 'bad'}>{`${ledgerPnlCards.netPnl >= 0 ? '+' : ''}${ledgerPnlCards.netPnl.toFixed(2)}%`}</strong></article>
+      </div>
         <div className="trade-extremes">
           <div className="trade-extremes-row trade-extremes-row-top">
             <button type="button" className="trade-extreme-card" onClick={() => focusTrade(bestTrade?.id ?? null)}>
