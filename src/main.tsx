@@ -511,27 +511,41 @@ const scoreTone = (score: number | null): Exclude<ScoreFilter, 'all'> =>
 const scoreMatches = (signal: Pick<Signal, 'reason'>, filter: ScoreFilter) =>
   filter === 'all' || scoreTone(getSignalScore(signal)) === filter;
 
+const ledgerRejectReason = (signal: Pick<Signal, 'ledgerSimulationNotes' | 'ledgerSimulationStatus'>) =>
+  signal.ledgerSimulationStatus === 'rejected'
+    ? signal.ledgerSimulationNotes?.[0] ?? 'Rejected by ledger simulation.'
+    : '';
+
 const formatPrivateVenueLabel = (signal: Pick<Signal, 'market' | 'executionLeverage'>) =>
   signal.market === 'futures' ? `Futures x${Math.max(1, signal.executionLeverage ?? 1)}` : 'Spot';
 
-const tradeLedgerColumns = [
+const acceptedTradeLedgerColumns = [
   'Trade',
   'Symbol',
   'Strategy',
-  'Simulation',
   'Status',
   'Side',
   'Venue',
-  'Mode',
   'TF',
-  'Entry Time',
-  'Duration',
   'Entry',
   'Market',
   'TP / SL',
   'Allocation',
   'Score',
   'PnL'
+] as const;
+
+const rejectedTradeLedgerColumns = [
+  'Trade',
+  'Symbol',
+  'Strategy',
+  'Reject Reason',
+  'Side',
+  'Venue',
+  'TF',
+  'Entry',
+  'TP / SL',
+  'Score'
 ] as const;
 
 const portfolioLedgerColumns = [
@@ -6091,26 +6105,27 @@ function PerformanceChart({
       pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
     };
   }), [ledgerSignals, tickers, futuresTickers]);
+  const acceptedTradeRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [tradeRows]);
+  const rejectedTradeRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus === 'rejected' || row.ledgerPnlEligible === false), [tradeRows]);
   const ledgerAcceptedRows = useMemo(() => ledgerBaseRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [ledgerBaseRows]);
   const bestTrade = useMemo(() => ledgerAcceptedRows.reduce<SignalTradeRow | null>((best, row) => !best || row.pnl > best.pnl ? row : best, null), [ledgerAcceptedRows]);
   const worstTrade = useMemo(() => ledgerAcceptedRows.reduce<SignalTradeRow | null>((worst, row) => !worst || row.pnl < worst.pnl ? row : worst, null), [ledgerAcceptedRows]);
   const ledgerStats = useMemo(() => ({
-    winCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.status === 'WIN').length,
-    lossCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.status === 'LOSS').length,
-    openCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.status === 'OPEN').length,
-    longCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.side === 'LONG').length,
-    shortCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.side === 'SHORT').length
-  }), [tradeRows]);
+    winCount: acceptedTradeRows.filter(row => row.status === 'WIN').length,
+    lossCount: acceptedTradeRows.filter(row => row.status === 'LOSS').length,
+    openCount: acceptedTradeRows.filter(row => row.status === 'OPEN').length,
+    longCount: acceptedTradeRows.filter(row => row.side === 'LONG').length,
+    shortCount: acceptedTradeRows.filter(row => row.side === 'SHORT').length
+  }), [acceptedTradeRows]);
     const ledgerPnlCards = useMemo(() => {
-      const pnlRows = tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false);
-      const openPnl = pnlRows.filter(row => row.status === 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
-      const closedPnl = pnlRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
+      const openPnl = acceptedTradeRows.filter(row => row.status === 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
+      const closedPnl = acceptedTradeRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
       return {
         openPnl,
         closedPnl,
         netPnl: openPnl + closedPnl
       };
-    }, [tradeRows]);
+    }, [acceptedTradeRows]);
   const filterCounts = useMemo(() => getSignalFilterCounts(ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter), [ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter]);
   const performanceRows = useMemo(() => performanceSignals.map(signal => {
     const marketPrice = tickers.get(signal.symbol)?.price;
@@ -6127,7 +6142,7 @@ function PerformanceChart({
   useEffect(() => {
     if (focusedTradeId == null) return;
     if (handledFocusedTradeIdRef.current === focusedTradeId) return;
-    const targetIndex = tradeRows.findIndex(row => row.id === focusedTradeId);
+    const targetIndex = acceptedTradeRows.findIndex(row => row.id === focusedTradeId);
     if (targetIndex === -1) return;
     handledFocusedTradeIdRef.current = focusedTradeId;
     tradeLedgerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -6135,7 +6150,7 @@ function PerformanceChart({
     if (!list) return;
     const visibleRows = 4;
     const desiredRowSlot = 0;
-    const maxStartIndex = Math.max(0, tradeRows.length - visibleRows);
+    const maxStartIndex = Math.max(0, acceptedTradeRows.length - visibleRows);
     const startIndex = Math.min(maxStartIndex, Math.max(0, targetIndex - desiredRowSlot));
     const estimatedTop = startIndex * ledgerRowHeight;
     list.scrollTo({ top: estimatedTop, behavior: 'auto' });
@@ -6171,7 +6186,7 @@ function PerformanceChart({
       window.cancelAnimationFrame(frameId);
       window.clearTimeout(timer);
     };
-  }, [focusedTradeId, tradeRows, ledgerViewportHeight]);
+  }, [focusedTradeId, acceptedTradeRows, ledgerViewportHeight]);
   useEffect(() => {
     const updateHeight = () => setLedgerViewportHeight(ledgerScrollRef.current?.clientHeight ?? 560);
     updateHeight();
@@ -6183,10 +6198,10 @@ function PerformanceChart({
   const ledgerOverscan = 8;
   const visibleLedgerCount = Math.max(18, Math.ceil(ledgerViewportHeight / ledgerRowHeight) + ledgerOverscan * 2);
   const visibleLedgerStart = Math.max(0, Math.floor(ledgerScrollTop / ledgerRowHeight) - ledgerOverscan);
-  const visibleLedgerEnd = Math.min(tradeRows.length, visibleLedgerStart + visibleLedgerCount);
-  const visibleTradeRows = useMemo(() => tradeRows.slice(visibleLedgerStart, visibleLedgerEnd), [tradeRows, visibleLedgerStart, visibleLedgerEnd]);
+  const visibleLedgerEnd = Math.min(acceptedTradeRows.length, visibleLedgerStart + visibleLedgerCount);
+  const visibleAcceptedTradeRows = useMemo(() => acceptedTradeRows.slice(visibleLedgerStart, visibleLedgerEnd), [acceptedTradeRows, visibleLedgerStart, visibleLedgerEnd]);
   const ledgerTopSpacerHeight = visibleLedgerStart * ledgerRowHeight;
-  const ledgerBottomSpacerHeight = Math.max(0, (tradeRows.length - visibleLedgerEnd) * ledgerRowHeight);
+  const ledgerBottomSpacerHeight = Math.max(0, (acceptedTradeRows.length - visibleLedgerEnd) * ledgerRowHeight);
 
   const resetLedgerScroll = () => {
     ledgerScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -6387,7 +6402,7 @@ function PerformanceChart({
             </button>
             <button type="button" className="trade-extreme-card" onClick={cycleLedgerMarketFilter}>
               <span>Spot / Futures</span>
-              <strong><b>{tradeRows.filter(row => row.market === 'spot').length}</b> / <b>{tradeRows.filter(row => row.market === 'futures').length}</b></strong>
+              <strong><b>{acceptedTradeRows.filter(row => row.market === 'spot').length}</b> / <b>{acceptedTradeRows.filter(row => row.market === 'futures').length}</b></strong>
               <small>{ledgerMarketFilter === 'all' ? 'Showing both venues' : ledgerMarketFilter === 'spot' ? 'Spot filter active' : 'Futures filter active'}</small>
             </button>
           </div>
@@ -6435,8 +6450,9 @@ function PerformanceChart({
           counts={filterCounts}
         />
         {tradeRows.length === 0 && <p className="empty">No trades generated for this selection yet.</p>}
-      {tradeRows.length > 0 && <div className="trade-ledger-shell">
+      {tradeRows.length > 0 && <div className="trade-ledger-shell trade-ledger-shell-accepted">
         <div className="trade-ledger-toolbar">
+          <strong className="portfolio-ledger-title">SIM OK Trades</strong>
           <div className="ledger-search-input trade-ledger-search">
             <Search size={16} />
             <input
@@ -6466,19 +6482,19 @@ function PerformanceChart({
           </div>
         </div>
         <div className="trade-ledger-scroll" ref={ledgerScrollRef} onScroll={event => setLedgerScrollTop(event.currentTarget.scrollTop)}>
-          <table className="trade-ledger trade-ledger-body">
+          <table className="trade-ledger trade-ledger-body sim-ok-table">
             <thead>
               <tr>
-                {tradeLedgerColumns.map(column => <th key={column}><LedgerHeaderCell column={column} /></th>)}
+                {acceptedTradeLedgerColumns.map(column => <th key={column}><LedgerHeaderCell column={column} /></th>)}
               </tr>
             </thead>
             <tbody>
-              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={17} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
-              {visibleTradeRows.map(row => <tr key={row.id} id={`trade-row-${row.id}`} className={`${focusedTradeId === row.id ? 'focused' : ''} chartable-row`} onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
+              {acceptedTradeRows.length === 0 && <tr><td colSpan={13} className="empty">No SIM OK trades matched this selection.</td></tr>}
+              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={13} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
+              {visibleAcceptedTradeRows.map(row => <tr key={row.id} id={`trade-row-${row.id}`} className={`${focusedTradeId === row.id ? 'focused' : ''} chartable-row`} onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
                 <td>{formatTradeLabel(row.id)}</td>
                 <td><strong>{row.symbol}</strong></td>
                 <td><span className="strategy-cell">{row.strategyName}</span></td>
-                <td><span className={`status-pill ${row.ledgerSimulationStatus === 'rejected' ? 'loss' : 'win'}`}>{row.ledgerSimulationStatus === 'rejected' ? 'SIM REJECTED' : 'SIM OK'}</span></td>
                 <td><span className={`status-pill ${row.status.toLowerCase()}`}>{row.status}</span></td>
                 <td><SideBadge side={row.side} /></td>
                 <td>
@@ -6486,18 +6502,43 @@ function PerformanceChart({
                     <strong>{row.market === 'futures' ? 'Futures x1' : 'Spot'}</strong>
                   </span>
                 </td>
-                <td>{formatExitModeLabel(row.exitMode)}</td>
                 <td>{row.timeframe}</td>
-                <td>{entryTime(row.openedAt)}</td>
-                <td>{formatDuration(row.openedAt, row.closedAt)}</td>
                 <td>{fmt(row.entry)}</td>
                 <td>{row.marketPrice ? fmt(row.marketPrice) : '-'}</td>
                 <td>{formatTargetRiskRatio(row)}</td>
-                <td>{row.ledgerSimulationStatus === 'rejected' ? '-' : `${(row.ledgerAllocationUsdt ?? 0).toFixed(2)} USDT`}</td>
+                <td>{`${(row.ledgerAllocationUsdt ?? 0).toFixed(2)} USDT`}</td>
                 <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
                 <td className="ledger-pnl-cell"><b className={`ledger-pnl-value ${row.pnl >= 0 ? 'good' : 'bad'}`}>{row.pnlLabel}</b></td>
               </tr>)}
-              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={17} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
+              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={13} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>}
+      {rejectedTradeRows.length > 0 && <div className="trade-ledger-shell trade-ledger-shell-rejected">
+        <div className="trade-ledger-toolbar">
+          <strong className="portfolio-ledger-title">SIM Rejected Trades</strong>
+        </div>
+        <div className="trade-ledger-scroll rejected-ledger-scroll">
+          <table className="trade-ledger trade-ledger-body sim-rejected-table">
+            <thead>
+              <tr>
+                {rejectedTradeLedgerColumns.map(column => <th key={column}><LedgerHeaderCell column={column} /></th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {rejectedTradeRows.map(row => <tr key={`rejected-${row.id}`} className="chartable-row" onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
+                <td>{formatTradeLabel(row.id)}</td>
+                <td><strong>{row.symbol}</strong></td>
+                <td><span className="strategy-cell">{row.strategyName}</span></td>
+                <td className="ledger-reject-reason"><span>{ledgerRejectReason(row)}</span></td>
+                <td><SideBadge side={row.side} /></td>
+                <td><span className="ledger-venue-cell"><strong>{row.market === 'futures' ? 'Futures x1' : 'Spot'}</strong></span></td>
+                <td>{row.timeframe}</td>
+                <td>{fmt(row.entry)}</td>
+                <td>{formatTargetRiskRatio(row)}</td>
+                <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
+              </tr>)}
             </tbody>
           </table>
         </div>

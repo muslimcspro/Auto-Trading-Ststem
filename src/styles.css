@@ -6467,11 +6467,11 @@ video {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.02);
 }
 .trade-ledger-shell { border: 1px solid var(--border); border-radius: 20px; background: var(--panel-strong); overflow: hidden; box-shadow: 0 18px 34px rgba(0,0,0,.14); }
-.trade-ledger-scroll { height: 260px; max-height: 260px; overflow-x: auto; overflow-y: auto; position: relative; }
+.trade-ledger-scroll { height: 260px; max-height: 260px; overflow-x: hidden; overflow-y: auto; position: relative; }
 .trade-ledger { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; background: var(--panel-strong); }
-.trade-ledger th, .trade-ledger td { padding: 12px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; vertical-align: middle; }
+.trade-ledger th, .trade-ledger td { padding: 10px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
 .trade-ledger th { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; background: linear-gradient(180deg, color-mix(in srgb, var(--panel-soft) 90%, transparent), color-mix(in srgb, var(--panel) 96%, black)); position: sticky; top: 0; z-index: 2; }
-.trade-ledger td { color: var(--soft-text); font-size: 13px; }
+.trade-ledger td { color: var(--soft-text); font-size: 12px; }
 .trade-ledger-body tbody tr { height: 60px; }
 .trade-ledger tr:last-child td { border-bottom: 0; }
 .trade-ledger tbody tr:hover { background: var(--hover); }
@@ -6506,6 +6506,101 @@ video {
 .trade-ledger td:nth-child(14) { width: 94px; }
 .trade-ledger th:nth-child(15),
 .trade-ledger td:nth-child(15) { width: 98px; }
+.sim-ok-table th:nth-child(1), .sim-ok-table td:nth-child(1) { width: 76px; }
+.sim-ok-table th:nth-child(2), .sim-ok-table td:nth-child(2) { width: 100px; }
+.sim-ok-table th:nth-child(3), .sim-ok-table td:nth-child(3) { width: 190px; }
+.sim-ok-table th:nth-child(4), .sim-ok-table td:nth-child(4) { width: 82px; }
+.sim-ok-table th:nth-child(5), .sim-ok-table td:nth-child(5) { width: 78px; }
+.sim-ok-table th:nth-child(6), .sim-ok-table td:nth-child(6) { width: 86px; }
+.sim-ok-table th:nth-child(7), .sim-ok-table td:nth-child(7) { width: 50px; }
+.sim-ok-table th:nth-child(8), .sim-ok-table td:nth-child(8),
+.sim-ok-table th:nth-child(9), .sim-ok-table td:nth-child(9) { width: 88px; }
+.sim-ok-table th:nth-child(10), .sim-ok-table td:nth-child(10) { width: 130px; }
+.sim-ok-table th:nth-child(11), .sim-ok-table td:nth-child(11) { width: 94px; }
+.sim-ok-table th:nth-child(12), .sim-ok-table td:nth-child(12) { width: 70px; text-align: center; }
+.sim-ok-table th:nth-child(13), .sim-ok-table td:nth-child(13) { width: 66px; text-align: right; }
+.sim-rejected-table th:nth-child(1), .sim-rejected-table td:nth-child(1) { width: 76px; }
+.sim-rejected-table th:nth-child(2), .sim-rejected-table td:nth-child(2) { width: 100px; }
+.sim-rejected-table th:nth-child(3), .sim-rejected-table td:nth-child(3) { width: 180px; }
+.sim-rejected-table th:nth-child(4), .sim-rejected-table td:nth-child(4) { width: auto; min-width: 0; }
+.sim-rejected-table th:nth-child(5), .sim-rejected-table td:nth-child(5) { width: 78px; }
+.sim-rejected-table th:nth-child(6), .sim-rejected-table td:nth-child(6) { width: 86px; }
+.sim-rejected-table th:nth-child(7), .sim-rejected-table td:nth-child(7) { width: 50px; }
+.sim-rejected-table th:nth-child(8), .sim-rejected-table td:nth-child(8) { width: 88px; }
+.sim-rejected-table th:nth-child(9), .sim-rejected-table td:nth-child(9) { width: 130px; }
+.sim-rejected-table th:nth-child(10), .sim-rejected-table td:nth-child(10) { width: 70px; text-align: center; }
+.rejected-ledger-scroll { height: 220px; max-height: 220px; }
+.trade-ledger-shell-rejected { margin-top: 12px; border-color: color-mix(in srgb, var(--danger) 24%, var(--border)); }
+.ledger-reject-reason span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--soft-text);
+  font-weight: 700;
+}
+@media (max-width: 760px) {
+  .page-dashboard .trade-ledger-scroll {
+    overflow-x: hidden;
+    height: 280px;
+    max-height: 280px;
+  }
+  .page-dashboard .trade-ledger {
+    width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+  }
+  .page-dashboard .trade-ledger th,
+  .page-dashboard .trade-ledger td {
+    padding: 7px 4px;
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+  .page-dashboard .trade-ledger th {
+    font-size: 7px;
+  }
+  .page-dashboard .sim-ok-table th:nth-child(1), .page-dashboard .sim-ok-table td:nth-child(1) { width: 8%; }
+  .page-dashboard .sim-ok-table th:nth-child(2), .page-dashboard .sim-ok-table td:nth-child(2) { width: 11%; }
+  .page-dashboard .sim-ok-table th:nth-child(3), .page-dashboard .sim-ok-table td:nth-child(3) { width: 15%; }
+  .page-dashboard .sim-ok-table th:nth-child(4), .page-dashboard .sim-ok-table td:nth-child(4) { width: 8%; }
+  .page-dashboard .sim-ok-table th:nth-child(5), .page-dashboard .sim-ok-table td:nth-child(5) { width: 8%; }
+  .page-dashboard .sim-ok-table th:nth-child(6), .page-dashboard .sim-ok-table td:nth-child(6) { width: 8%; }
+  .page-dashboard .sim-ok-table th:nth-child(7), .page-dashboard .sim-ok-table td:nth-child(7) { width: 5%; }
+  .page-dashboard .sim-ok-table th:nth-child(8), .page-dashboard .sim-ok-table td:nth-child(8),
+  .page-dashboard .sim-ok-table th:nth-child(9), .page-dashboard .sim-ok-table td:nth-child(9) { width: 8%; }
+  .page-dashboard .sim-ok-table th:nth-child(10), .page-dashboard .sim-ok-table td:nth-child(10) { width: 11%; }
+  .page-dashboard .sim-ok-table th:nth-child(11), .page-dashboard .sim-ok-table td:nth-child(11) { width: 9%; }
+  .page-dashboard .sim-ok-table th:nth-child(12), .page-dashboard .sim-ok-table td:nth-child(12) { width: 6%; }
+  .page-dashboard .sim-ok-table th:nth-child(13), .page-dashboard .sim-ok-table td:nth-child(13) { width: 6%; }
+  .page-dashboard .sim-rejected-table th:nth-child(1), .page-dashboard .sim-rejected-table td:nth-child(1) { width: 9%; }
+  .page-dashboard .sim-rejected-table th:nth-child(2), .page-dashboard .sim-rejected-table td:nth-child(2) { width: 12%; }
+  .page-dashboard .sim-rejected-table th:nth-child(3), .page-dashboard .sim-rejected-table td:nth-child(3) { width: 16%; }
+  .page-dashboard .sim-rejected-table th:nth-child(4), .page-dashboard .sim-rejected-table td:nth-child(4) { width: 28%; }
+  .page-dashboard .sim-rejected-table th:nth-child(5), .page-dashboard .sim-rejected-table td:nth-child(5) { width: 8%; }
+  .page-dashboard .sim-rejected-table th:nth-child(6), .page-dashboard .sim-rejected-table td:nth-child(6) { width: 8%; }
+  .page-dashboard .sim-rejected-table th:nth-child(7), .page-dashboard .sim-rejected-table td:nth-child(7) { width: 5%; }
+  .page-dashboard .sim-rejected-table th:nth-child(8), .page-dashboard .sim-rejected-table td:nth-child(8) { width: 8%; }
+  .page-dashboard .sim-rejected-table th:nth-child(9), .page-dashboard .sim-rejected-table td:nth-child(9) { width: 11%; }
+  .page-dashboard .sim-rejected-table th:nth-child(10), .page-dashboard .sim-rejected-table td:nth-child(10) { width: 6%; }
+  .page-dashboard .ledger-score,
+  .page-dashboard .ledger-pnl-value,
+  .page-dashboard .ledger-venue-cell strong {
+    min-width: 0;
+    padding: 2px 3px;
+    font-size: 7px;
+  }
+}
+
+@media (max-width: 760px) {
+  .page-dashboard .trade-ledger-scroll {
+    overflow-x: hidden !important;
+  }
+  .page-dashboard .trade-ledger {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+}
 .ledger-score-cell,
 .ledger-pnl-cell {
   text-align: center;
@@ -15351,8 +15446,34 @@ video {
     line-height: 1;
   }
 
-  .home-top-market-card::after {
+.home-top-market-card::after {
     inset-inline: 6px;
     height: 3px;
+  }
+}
+
+@media (max-width: 760px) {
+  .page-dashboard .trade-ledger-scroll {
+    overflow-x: hidden !important;
+  }
+  .page-dashboard .trade-ledger {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+  .page-dashboard .trade-ledger th,
+  .page-dashboard .trade-ledger td {
+    padding: 7px 4px;
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+  .page-dashboard .trade-ledger th {
+    font-size: 7px;
+  }
+  .page-dashboard .ledger-score,
+  .page-dashboard .ledger-pnl-value,
+  .page-dashboard .ledger-venue-cell strong {
+    min-width: 0;
+    padding: 2px 3px;
+    font-size: 7px;
   }
 }
