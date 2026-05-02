@@ -6286,7 +6286,8 @@ video {
   min-height: 620px;
   background: #131722;
 }
-.tradingview-chart-canvas iframe {
+.tradingview-chart-widget,
+.tradingview-chart-widget iframe {
   display: block;
   width: 100%;
   height: 100%;

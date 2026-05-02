@@ -1043,29 +1043,84 @@ function tradingViewInterval(timeframe: Timeframe) {
   } as Record<Timeframe, string>)[timeframe];
 }
 
-function tradingViewEmbedUrl(trade: TradeChartTrade) {
-  const params = new URLSearchParams({
-    frameElementId: `tradingview_${trade.id}`,
-    symbol: tradingViewSymbolForTrade(trade),
-    interval: tradingViewInterval(trade.timeframe),
-    hidetoptoolbar: '0',
-    hidesidetoolbar: '0',
-    symboledit: '1',
-    saveimage: '1',
-    toolbarbg: '131722',
-    studies: '[]',
-    theme: 'dark',
-    style: '1',
-    timezone: 'Etc/UTC',
-    withdateranges: '1',
-    hideideas: '1',
-    studies_overrides: '{}',
-    overrides: '{}',
-    enabled_features: '[]',
-    disabled_features: '[]',
-    locale: 'en'
+let tradingViewWidgetScriptPromise: Promise<void> | null = null;
+
+function loadTradingViewWidgetScript() {
+  if (tradingViewWidgetScriptPromise) return tradingViewWidgetScriptPromise;
+  tradingViewWidgetScriptPromise = new Promise((resolve, reject) => {
+    if ((window as any).TradingView?.widget) {
+      resolve();
+      return;
+    }
+    const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://s3.tradingview.com/tv.js"]');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(), { once: true });
+      existingScript.addEventListener('error', () => reject(new Error('TradingView script failed')), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/tv.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('TradingView script failed'));
+    document.head.appendChild(script);
   });
-  return `https://s.tradingview.com/widgetembed/?${params.toString()}`;
+  return tradingViewWidgetScriptPromise;
+}
+
+function TradingViewTradeChart({ trade }: { trade: TradeChartTrade }) {
+  const [error, setError] = useState('');
+  const containerId = useMemo(() => `tradingview_trade_${String(trade.id).replace(/[^a-zA-Z0-9_-]/g, '_')}`, [trade.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError('');
+    const container = document.getElementById(containerId);
+    if (container) container.innerHTML = '';
+
+    loadTradingViewWidgetScript()
+      .then(() => {
+        if (cancelled) return;
+        const TradingView = (window as any).TradingView;
+        if (!TradingView?.widget) throw new Error('TradingView widget unavailable');
+        new TradingView.widget({
+          autosize: true,
+          symbol: tradingViewSymbolForTrade(trade),
+          interval: tradingViewInterval(trade.timeframe),
+          timezone: 'Etc/UTC',
+          theme: 'dark',
+          style: '1',
+          locale: 'en',
+          enable_publishing: false,
+          withdateranges: true,
+          hide_side_toolbar: false,
+          allow_symbol_change: true,
+          save_image: true,
+          details: true,
+          hotlist: false,
+          calendar: false,
+          studies: [],
+          enabled_features: ['side_toolbar_in_fullscreen_mode'],
+          disabled_features: [],
+          support_host: 'https://www.tradingview.com',
+          container_id: containerId
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setError('Unable to load TradingView drawing tools.');
+      });
+
+    return () => {
+      cancelled = true;
+      const currentContainer = document.getElementById(containerId);
+      if (currentContainer) currentContainer.innerHTML = '';
+    };
+  }, [containerId, trade]);
+
+  return <>
+    <div id={containerId} className="tradingview-chart-widget" />
+    {error && <div className="trade-chart-state error">{error}</div>}
+  </>;
 }
 
 function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; onClose: () => void }) {
@@ -1095,12 +1150,7 @@ function TradeChartModal({ trade, onClose }: { trade: TradeChartTrade | null; on
         <span><b>TradingView</b><em>{tvSymbol}</em></span>
       </div>
       <div className="trade-chart-canvas tradingview-chart-canvas">
-        <iframe
-          key={`${trade.id}:${tvSymbol}:${trade.timeframe}`}
-          title={`${trade.symbol} TradingView chart`}
-          src={tradingViewEmbedUrl(trade)}
-          allowFullScreen
-        />
+        <TradingViewTradeChart key={`${trade.id}:${tvSymbol}:${trade.timeframe}`} trade={trade} />
       </div>
     </section>
   </div>;
