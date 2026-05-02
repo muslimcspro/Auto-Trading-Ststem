@@ -40,6 +40,24 @@ type Signal = {
   executionMarginMode?: 'isolated' | 'cross' | null;
   executionStatus?: 'pending' | 'rejected' | 'test_accepted' | 'test_failed' | 'live_accepted' | 'live_failed' | 'blocked';
   executionNotes?: string[];
+  ledgerSimulationStatus?: 'accepted' | 'rejected';
+  ledgerSimulationNotes?: string[];
+  ledgerQualityScore?: number | null;
+  ledgerQualityGatePassed?: boolean;
+  ledgerPnlEligible?: boolean;
+  ledgerStartingCapitalUsdt?: number;
+  ledgerAvailableCapitalUsdt?: number;
+  ledgerAllocationUsdt?: number;
+  ledgerNotionalUsdt?: number;
+  ledgerQuantity?: number;
+  ledgerEstimatedFeeUsdt?: number;
+  ledgerEstimatedSlippageUsdt?: number;
+  ledgerRiskAmountUsdt?: number;
+  ledgerRiskPctOfCapital?: number;
+  ledgerMinNotionalUsdt?: number;
+  ledgerNormalizedEntry?: number;
+  ledgerNormalizedTakeProfit?: number;
+  ledgerNormalizedStopLoss?: number;
   closedAt?: number;
   closePrice?: number;
   binanceCloseOrderId?: string;
@@ -67,6 +85,32 @@ type Stat = {
   openShort: number;
 };
 type Notification = { id: number; time: number; title: string; message: string; level: 'info' | 'win' | 'loss' };
+type LedgerSimulationSettings = {
+  enabled: boolean;
+  startingCapitalUsdt: number;
+  reserveRatio: number;
+  maxOpenTrades: number;
+  minNotionalUsdt: number;
+  allocationMethod: 'equal' | 'available';
+  riskPerTradePct: number;
+  spotFeePct: number;
+  futuresFeePct: number;
+  slippagePct: number;
+  futuresLeverage: number;
+  marketScope: 'spot' | 'futures' | 'both';
+  allowedDirection: 'both' | 'long-only' | 'short-only';
+  maxSameDirectionOpen: number;
+  maxSameMarketDirectionOpen: number;
+  maxSameBaseAssetOpen: number;
+};
+type LedgerSimulationSnapshot = {
+  startingCapital: number;
+  currentCapital: number;
+  deployableCapital: number;
+  committedCapital: number;
+  availableCapital: number;
+  openAccepted: number;
+};
 type TradeChartTrade = {
   id: number;
   symbol: string;
@@ -474,6 +518,7 @@ const tradeLedgerColumns = [
   'Trade',
   'Symbol',
   'Strategy',
+  'Simulation',
   'Status',
   'Side',
   'Venue',
@@ -484,6 +529,7 @@ const tradeLedgerColumns = [
   'Entry',
   'Market',
   'TP / SL',
+  'Allocation',
   'Score',
   'PnL'
 ] as const;
@@ -5917,6 +5963,10 @@ function PerformanceChart({
   const [ledgerExecutionProfileFilter, setLedgerExecutionProfileFilter] = useState<'all' | ExitMode>('all');
   const [ledgerScoreFilter, setLedgerScoreFilter] = useState<ScoreFilter>('all');
   const [ledgerTradeQuery, setLedgerTradeQuery] = useState('');
+  const [ledgerSimulationSettings, setLedgerSimulationSettings] = useState<LedgerSimulationSettings | null>(null);
+  const [ledgerSimulationDraft, setLedgerSimulationDraft] = useState<LedgerSimulationSettings | null>(null);
+  const [ledgerSimulationSnapshot, setLedgerSimulationSnapshot] = useState<LedgerSimulationSnapshot | null>(null);
+  const [ledgerSimulationSaving, setLedgerSimulationSaving] = useState(false);
   const [chartTrade, setChartTrade] = useState<TradeChartTrade | null>(null);
   const [ledgerRange, setLedgerRange] = useState<PerformanceRange>('24h');
   const [ledgerCustomFrom, setLedgerCustomFrom] = useState(() => toDateInput(Date.now() - 7 * 24 * 60 * 60 * 1000));
@@ -5941,6 +5991,25 @@ function PerformanceChart({
   const commandRangeEnd = effectiveCommandRange === 'custom'
     ? new Date(`${effectiveCommandCustomTo}T23:59:59.999`).getTime() || Date.now()
     : Date.now();
+  useEffect(() => {
+    let cancelled = false;
+    const loadLedgerSimulation = () => {
+      api<{ settings: LedgerSimulationSettings; snapshot: LedgerSimulationSnapshot }>('/api/ledger-simulation')
+        .then(response => {
+          if (cancelled) return;
+          setLedgerSimulationSettings(response.settings);
+          setLedgerSimulationDraft(response.settings);
+          setLedgerSimulationSnapshot(response.snapshot);
+        })
+        .catch(() => undefined);
+    };
+    loadLedgerSimulation();
+    const timer = window.setInterval(loadLedgerSimulation, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
   const commandSignals = useMemo(() => signals.filter(signal => {
     const stamp = rangeSignalTimestamp(signal);
     return stamp >= commandRangeStart && stamp <= commandRangeEnd;
@@ -6022,18 +6091,20 @@ function PerformanceChart({
       pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
     };
   }), [ledgerSignals, tickers, futuresTickers]);
-  const bestTrade = useMemo(() => ledgerBaseRows.reduce<SignalTradeRow | null>((best, row) => !best || row.pnl > best.pnl ? row : best, null), [ledgerBaseRows]);
-  const worstTrade = useMemo(() => ledgerBaseRows.reduce<SignalTradeRow | null>((worst, row) => !worst || row.pnl < worst.pnl ? row : worst, null), [ledgerBaseRows]);
+  const ledgerAcceptedRows = useMemo(() => ledgerBaseRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [ledgerBaseRows]);
+  const bestTrade = useMemo(() => ledgerAcceptedRows.reduce<SignalTradeRow | null>((best, row) => !best || row.pnl > best.pnl ? row : best, null), [ledgerAcceptedRows]);
+  const worstTrade = useMemo(() => ledgerAcceptedRows.reduce<SignalTradeRow | null>((worst, row) => !worst || row.pnl < worst.pnl ? row : worst, null), [ledgerAcceptedRows]);
   const ledgerStats = useMemo(() => ({
-    winCount: tradeRows.filter(row => row.status === 'WIN').length,
-    lossCount: tradeRows.filter(row => row.status === 'LOSS').length,
-    openCount: tradeRows.filter(row => row.status === 'OPEN').length,
-    longCount: tradeRows.filter(row => row.side === 'LONG').length,
-    shortCount: tradeRows.filter(row => row.side === 'SHORT').length
+    winCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.status === 'WIN').length,
+    lossCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.status === 'LOSS').length,
+    openCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.status === 'OPEN').length,
+    longCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.side === 'LONG').length,
+    shortCount: tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.side === 'SHORT').length
   }), [tradeRows]);
     const ledgerPnlCards = useMemo(() => {
-      const openPnl = tradeRows.filter(row => row.status === 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
-      const closedPnl = tradeRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
+      const pnlRows = tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false);
+      const openPnl = pnlRows.filter(row => row.status === 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
+      const closedPnl = pnlRows.filter(row => row.status !== 'OPEN').reduce((sum, row) => sum + row.pnl, 0);
       return {
         openPnl,
         closedPnl,
@@ -6172,6 +6243,22 @@ function PerformanceChart({
     setLedgerStatusFilter(prev => prev === 'closed' ? 'all' : 'closed');
     resetLedgerScroll();
   };
+  const saveLedgerSimulation = async () => {
+    if (!ledgerSimulationDraft) return;
+    setLedgerSimulationSaving(true);
+    try {
+      const response = await api<{ settings: LedgerSimulationSettings; snapshot: LedgerSimulationSnapshot }>('/api/ledger-simulation', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(ledgerSimulationDraft)
+      });
+      setLedgerSimulationSettings(response.settings);
+      setLedgerSimulationDraft(response.settings);
+      setLedgerSimulationSnapshot(response.snapshot);
+    } finally {
+      setLedgerSimulationSaving(false);
+    }
+  };
   return <section className="panel performance-command" id="performance-command" ref={performanceCommandRef}>
     <div className="section-title dashboard-section-title performance-command-head">
       <h2>Performance Command Center</h2>
@@ -6253,6 +6340,28 @@ function PerformanceChart({
       {ledgerRange === 'custom' && <div className="custom-range-panel ledger-custom-range">
         <CustomDateField label="From" value={ledgerCustomFrom} max={ledgerCustomTo} onChange={setLedgerCustomFrom} />
         <CustomDateField label="To" value={ledgerCustomTo} min={ledgerCustomFrom} onChange={setLedgerCustomTo} />
+      </div>}
+      {ledgerSimulationDraft && <div className="ledger-simulation-panel">
+        <div className="ledger-simulation-head">
+          <div>
+            <span>Ledger Simulation</span>
+            <strong>{`${(ledgerSimulationSnapshot?.currentCapital ?? ledgerSimulationDraft.startingCapitalUsdt).toFixed(2)} USDT`}</strong>
+            <small>{`Available ${(ledgerSimulationSnapshot?.availableCapital ?? 0).toFixed(2)} USDT • Open ${ledgerSimulationSnapshot?.openAccepted ?? 0}/${ledgerSimulationDraft.maxOpenTrades}`}</small>
+          </div>
+          <button type="button" className="primary small" disabled={ledgerSimulationSaving || JSON.stringify(ledgerSimulationSettings) === JSON.stringify(ledgerSimulationDraft)} onClick={saveLedgerSimulation}>
+            {ledgerSimulationSaving ? 'Saving' : 'Apply'}
+          </button>
+        </div>
+        <div className="ledger-simulation-grid">
+          <label><span>Capital</span><input type="number" min={5} step={5} value={ledgerSimulationDraft.startingCapitalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, startingCapitalUsdt: Number(event.target.value) })} /></label>
+          <label><span>Reserve %</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.reserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, reserveRatio: Number(event.target.value) })} /></label>
+          <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.maxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, maxOpenTrades: Number(event.target.value) })} /></label>
+          <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.minNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, minNotionalUsdt: Number(event.target.value) })} /></label>
+          <label><span>Risk %</span><input type="number" min={0.1} max={20} step={0.1} value={ledgerSimulationDraft.riskPerTradePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, riskPerTradePct: Number(event.target.value) })} /></label>
+          <label><span>Slip %</span><input type="number" min={0} max={5} step={0.01} value={ledgerSimulationDraft.slippagePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, slippagePct: Number(event.target.value) })} /></label>
+          <label><span>Fut Lev</span><input type="number" min={1} max={20} step={1} value={ledgerSimulationDraft.futuresLeverage} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresLeverage: Number(event.target.value) })} /></label>
+          <label><span>Allocation</span><select value={ledgerSimulationDraft.allocationMethod} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allocationMethod: event.target.value as LedgerSimulationSettings['allocationMethod'] })}><option value="equal">Equal slots</option><option value="available">Use available</option></select></label>
+        </div>
       </div>}
         <div className="trade-extremes">
           <div className="trade-extremes-row trade-extremes-row-top">
@@ -6364,11 +6473,12 @@ function PerformanceChart({
               </tr>
             </thead>
             <tbody>
-              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={15} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
-              {visibleTradeRows.map(row => <tr key={row.id} id={`trade-row-${row.id}`} className={`${focusedTradeId === row.id ? 'focused' : ''} chartable-row`} onClick={() => setChartTrade(row)} title="Open TradingView chart">
+              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={17} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
+              {visibleTradeRows.map(row => <tr key={row.id} id={`trade-row-${row.id}`} className={`${focusedTradeId === row.id ? 'focused' : ''} chartable-row`} onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
                 <td>{formatTradeLabel(row.id)}</td>
                 <td><strong>{row.symbol}</strong></td>
                 <td><span className="strategy-cell">{row.strategyName}</span></td>
+                <td><span className={`status-pill ${row.ledgerSimulationStatus === 'rejected' ? 'loss' : 'win'}`}>{row.ledgerSimulationStatus === 'rejected' ? 'SIM REJECTED' : 'SIM OK'}</span></td>
                 <td><span className={`status-pill ${row.status.toLowerCase()}`}>{row.status}</span></td>
                 <td><SideBadge side={row.side} /></td>
                 <td>
@@ -6383,10 +6493,11 @@ function PerformanceChart({
                 <td>{fmt(row.entry)}</td>
                 <td>{row.marketPrice ? fmt(row.marketPrice) : '-'}</td>
                 <td>{formatTargetRiskRatio(row)}</td>
+                <td>{row.ledgerSimulationStatus === 'rejected' ? '-' : `${(row.ledgerAllocationUsdt ?? 0).toFixed(2)} USDT`}</td>
                 <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
                 <td className="ledger-pnl-cell"><b className={`ledger-pnl-value ${row.pnl >= 0 ? 'good' : 'bad'}`}>{row.pnlLabel}</b></td>
               </tr>)}
-              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={15} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
+              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={17} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
             </tbody>
           </table>
         </div>
@@ -6645,10 +6756,17 @@ type SignalTradeRow = Signal & {
 };
 
 function getSignalPnl(signal: Signal, marketPrice?: number) {
-  if (signal.status === 'OPEN') return marketPrice ? pnlFromPrice(signal, marketPrice) : 0;
-  if (signal.status === 'WIN') return signal.closePrice ? pnlFromPrice(signal, signal.closePrice) : signal.expectedProfitPct;
-  if (signal.status === 'LOSS') return signal.closePrice ? pnlFromPrice(signal, signal.closePrice) : -signal.riskPct;
-  return 0;
+  if (signal.ledgerSimulationStatus === 'rejected' || signal.ledgerPnlEligible === false) return 0;
+  const price = signal.status === 'OPEN'
+    ? marketPrice
+    : signal.closePrice ?? (signal.status === 'WIN' ? signal.takeProfit : signal.status === 'LOSS' ? signal.stopLoss : undefined);
+  if (!price) return 0;
+  const notional = Math.max(0, signal.ledgerNotionalUsdt ?? signal.ledgerAllocationUsdt ?? 0);
+  if (notional <= 0) return pnlFromPrice(signal, price);
+  const capital = Math.max(1, signal.ledgerStartingCapitalUsdt ?? 100);
+  const grossUsdt = notional * (pnlFromPrice(signal, price) / 100);
+  const costs = Math.max(0, (signal.ledgerEstimatedFeeUsdt ?? 0) + (signal.ledgerEstimatedSlippageUsdt ?? 0));
+  return ((grossUsdt - costs) / capital) * 100;
 }
 
 function pnlFromPrice(signal: Signal, price: number) {

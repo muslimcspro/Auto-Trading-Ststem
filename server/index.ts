@@ -85,6 +85,24 @@ type TradeSignal = SignalDraft & {
   executionMarginMode?: 'isolated' | 'cross' | null;
   executionStatus?: 'pending' | 'rejected' | 'test_accepted' | 'test_failed' | 'live_accepted' | 'live_failed' | 'blocked';
   executionNotes?: string[];
+  ledgerSimulationStatus?: 'accepted' | 'rejected';
+  ledgerSimulationNotes?: string[];
+  ledgerQualityScore?: number | null;
+  ledgerQualityGatePassed?: boolean;
+  ledgerPnlEligible?: boolean;
+  ledgerStartingCapitalUsdt?: number;
+  ledgerAvailableCapitalUsdt?: number;
+  ledgerAllocationUsdt?: number;
+  ledgerNotionalUsdt?: number;
+  ledgerQuantity?: number;
+  ledgerEstimatedFeeUsdt?: number;
+  ledgerEstimatedSlippageUsdt?: number;
+  ledgerRiskAmountUsdt?: number;
+  ledgerRiskPctOfCapital?: number;
+  ledgerMinNotionalUsdt?: number;
+  ledgerNormalizedEntry?: number;
+  ledgerNormalizedTakeProfit?: number;
+  ledgerNormalizedStopLoss?: number;
   closedAt?: number;
   closePrice?: number;
   binanceCloseOrderId?: string;
@@ -152,6 +170,25 @@ type LiveExecutionRules = {
   portfolioFloorEnabled: boolean;
   portfolioFloorTriggerPct: number;
   portfolioFloorLockPct: number;
+};
+
+type LedgerSimulationSettings = {
+  enabled: boolean;
+  startingCapitalUsdt: number;
+  reserveRatio: number;
+  maxOpenTrades: number;
+  minNotionalUsdt: number;
+  allocationMethod: 'equal' | 'available';
+  riskPerTradePct: number;
+  spotFeePct: number;
+  futuresFeePct: number;
+  slippagePct: number;
+  futuresLeverage: number;
+  marketScope: ExecutionVenue;
+  allowedDirection: 'both' | 'long-only' | 'short-only';
+  maxSameDirectionOpen: number;
+  maxSameMarketDirectionOpen: number;
+  maxSameBaseAssetOpen: number;
 };
 
 type StrategyStats = {
@@ -910,6 +947,24 @@ let liveExecutionRules: LiveExecutionRules = {
   portfolioFloorTriggerPct: 13,
   portfolioFloorLockPct: 8
 };
+let ledgerSimulationSettings: LedgerSimulationSettings = {
+  enabled: true,
+  startingCapitalUsdt: 100,
+  reserveRatio: 10,
+  maxOpenTrades: 10,
+  minNotionalUsdt: 5,
+  allocationMethod: 'equal',
+  riskPerTradePct: 2,
+  spotFeePct: 0.2,
+  futuresFeePct: 0.1,
+  slippagePct: 0.04,
+  futuresLeverage: 1,
+  marketScope: 'both',
+  allowedDirection: 'both',
+  maxSameDirectionOpen: 8,
+  maxSameMarketDirectionOpen: 6,
+  maxSameBaseAssetOpen: 1
+};
 let liveProtectionBusy = false;
 let portfolioFloorArmed = false;
 let portfolioFloorPeakR = 0;
@@ -1662,6 +1717,27 @@ function buildLiveExecutionRulesPatch(input: Partial<LiveExecutionRules>): LiveE
   };
 }
 
+function buildLedgerSimulationSettingsPatch(input: Partial<LedgerSimulationSettings>): LedgerSimulationSettings {
+  return {
+    enabled: input.enabled !== false,
+    startingCapitalUsdt: Math.max(5, Math.min(1_000_000, toFiniteNumber(input.startingCapitalUsdt, ledgerSimulationSettings.startingCapitalUsdt))),
+    reserveRatio: Math.max(0, Math.min(95, toFiniteNumber(input.reserveRatio, ledgerSimulationSettings.reserveRatio))),
+    maxOpenTrades: Math.max(1, Math.min(200, Math.floor(toFiniteNumber(input.maxOpenTrades, ledgerSimulationSettings.maxOpenTrades)))),
+    minNotionalUsdt: Math.max(1, Math.min(500, toFiniteNumber(input.minNotionalUsdt, ledgerSimulationSettings.minNotionalUsdt))),
+    allocationMethod: input.allocationMethod === 'available' ? 'available' : 'equal',
+    riskPerTradePct: Math.max(0.1, Math.min(20, toFiniteNumber(input.riskPerTradePct, ledgerSimulationSettings.riskPerTradePct))),
+    spotFeePct: Math.max(0, Math.min(2, toFiniteNumber(input.spotFeePct, ledgerSimulationSettings.spotFeePct))),
+    futuresFeePct: Math.max(0, Math.min(2, toFiniteNumber(input.futuresFeePct, ledgerSimulationSettings.futuresFeePct))),
+    slippagePct: Math.max(0, Math.min(5, toFiniteNumber(input.slippagePct, ledgerSimulationSettings.slippagePct))),
+    futuresLeverage: Math.max(1, Math.min(20, Math.floor(toFiniteNumber(input.futuresLeverage, ledgerSimulationSettings.futuresLeverage)))),
+    marketScope: input.marketScope === 'spot' || input.marketScope === 'futures' || input.marketScope === 'both' ? input.marketScope : 'both',
+    allowedDirection: input.allowedDirection === 'long-only' || input.allowedDirection === 'short-only' || input.allowedDirection === 'both' ? input.allowedDirection : 'both',
+    maxSameDirectionOpen: Math.max(1, Math.min(200, Math.floor(toFiniteNumber(input.maxSameDirectionOpen, ledgerSimulationSettings.maxSameDirectionOpen)))),
+    maxSameMarketDirectionOpen: Math.max(1, Math.min(200, Math.floor(toFiniteNumber(input.maxSameMarketDirectionOpen, ledgerSimulationSettings.maxSameMarketDirectionOpen)))),
+    maxSameBaseAssetOpen: Math.max(1, Math.min(20, Math.floor(toFiniteNumber(input.maxSameBaseAssetOpen, ledgerSimulationSettings.maxSameBaseAssetOpen))))
+  };
+}
+
 function getRankedStrategyIds() {
   return getStats()
     .map(stat => ({
@@ -1676,6 +1752,52 @@ function getRankedStrategyIds() {
 function getSymbolRules(symbol: string, market: TradingVenue) {
   const source = market === 'futures' ? futuresSymbols : symbols;
   return source.find(item => item.symbol === symbol) ?? null;
+}
+
+function countsInLedgerSimulation(signal: TradeSignal) {
+  return signal.ledgerSimulationStatus !== 'rejected' && signal.ledgerPnlEligible !== false;
+}
+
+function ledgerFeeRatePct(market: TradingVenue) {
+  return market === 'futures' ? ledgerSimulationSettings.futuresFeePct : ledgerSimulationSettings.spotFeePct;
+}
+
+function ledgerSignalPnlUsdt(signal: TradeSignal, marketPrice?: number) {
+  if (!countsInLedgerSimulation(signal)) return 0;
+  const price = signal.status === 'OPEN'
+    ? marketPrice
+    : signal.closePrice ?? (signal.status === 'WIN' ? signal.takeProfit : signal.status === 'LOSS' ? signal.stopLoss : undefined);
+  if (!price || !Number.isFinite(price) || price <= 0) return 0;
+  const notional = Math.max(0, signal.ledgerNotionalUsdt ?? signal.ledgerAllocationUsdt ?? 0);
+  if (notional <= 0) return 0;
+  const grossPnl = notional * (percent(signal.entry, price, signal.side) / 100);
+  const estimatedCosts = Math.max(0, (signal.ledgerEstimatedFeeUsdt ?? 0) + (signal.ledgerEstimatedSlippageUsdt ?? 0));
+  return grossPnl - estimatedCosts;
+}
+
+function ledgerSignalPnlPct(signal: TradeSignal, marketPrice?: number) {
+  const capital = Math.max(1, signal.ledgerStartingCapitalUsdt ?? ledgerSimulationSettings.startingCapitalUsdt);
+  return (ledgerSignalPnlUsdt(signal, marketPrice) / capital) * 100;
+}
+
+function ledgerCapitalSnapshot(excludeSignalId?: number) {
+  const startingCapital = ledgerSimulationSettings.startingCapitalUsdt;
+  const accepted = signals.filter(signal => signal.id !== excludeSignalId && countsInLedgerSimulation(signal));
+  const realizedPnl = accepted
+    .filter(signal => signal.status !== 'OPEN')
+    .reduce((sum, signal) => sum + ledgerSignalPnlUsdt(signal), 0);
+  const currentCapital = Math.max(0, startingCapital + realizedPnl);
+  const deployableCapital = currentCapital * (1 - ledgerSimulationSettings.reserveRatio / 100);
+  const open = accepted.filter(signal => signal.status === 'OPEN');
+  const committedCapital = open.reduce((sum, signal) => sum + Math.max(0, signal.ledgerAllocationUsdt ?? 0), 0);
+  return {
+    startingCapital,
+    currentCapital,
+    deployableCapital,
+    committedCapital,
+    availableCapital: Math.max(0, deployableCapital - committedCapital),
+    open
+  };
 }
 
 function decimalPlacesFromStep(stepSize?: number, quantityPrecision?: number) {
@@ -1723,6 +1845,131 @@ function formatBinancePrice(price: number, rules: SymbolInfo | null) {
     throw new Error('Calculated Binance price is invalid.');
   }
   return normalizedPrice.toFixed(precision).replace(/\.?0+$/, '');
+}
+
+function rejectLedgerSimulation(signal: TradeSignal, notes: string[], score?: number, gatePassed?: boolean) {
+  signal.ledgerSimulationStatus = 'rejected';
+  signal.ledgerSimulationNotes = notes;
+  signal.ledgerQualityScore = Number.isFinite(score) ? score! : null;
+  signal.ledgerQualityGatePassed = Boolean(gatePassed);
+  signal.ledgerPnlEligible = false;
+  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.startingCapitalUsdt;
+  signal.ledgerAvailableCapitalUsdt = ledgerCapitalSnapshot(signal.id).availableCapital;
+}
+
+function applyLedgerSimulation(candidate: SignalCandidate) {
+  const { signal } = candidate;
+  const qualityGatePassed = passesQualityGate(candidate);
+  const softNotes = qualityGatePassed ? [] : ['Technical quality gate did not block generation; review score components before live execution.'];
+  signal.ledgerQualityScore = candidate.score;
+  signal.ledgerQualityGatePassed = qualityGatePassed;
+  signal.ledgerSimulationNotes = softNotes;
+  signal.ledgerPnlEligible = true;
+  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.startingCapitalUsdt;
+
+  if (!ledgerSimulationSettings.enabled) {
+    rejectLedgerSimulation(signal, ['Ledger simulation is disabled.'], candidate.score, qualityGatePassed);
+    return;
+  }
+  if (ledgerSimulationSettings.marketScope !== 'both' && signal.market !== ledgerSimulationSettings.marketScope) {
+    rejectLedgerSimulation(signal, [`${signal.market.toUpperCase()} is outside the ledger simulation market scope.`], candidate.score, qualityGatePassed);
+    return;
+  }
+  if (ledgerSimulationSettings.allowedDirection === 'long-only' && signal.side !== 'LONG') {
+    rejectLedgerSimulation(signal, ['Ledger simulation allows LONG signals only.'], candidate.score, qualityGatePassed);
+    return;
+  }
+  if (ledgerSimulationSettings.allowedDirection === 'short-only' && signal.side !== 'SHORT') {
+    rejectLedgerSimulation(signal, ['Ledger simulation allows SHORT signals only.'], candidate.score, qualityGatePassed);
+    return;
+  }
+  const rules = getSymbolRules(signal.symbol, signal.market);
+  if (!rules) {
+    rejectLedgerSimulation(signal, [`${signal.symbol} is not available as a ${signal.market.toUpperCase()} Binance symbol.`], candidate.score, qualityGatePassed);
+    return;
+  }
+  if (rules.status && rules.status !== 'TRADING') {
+    rejectLedgerSimulation(signal, [`${signal.symbol} is not TRADING on Binance right now.`], candidate.score, qualityGatePassed);
+    return;
+  }
+
+  const snapshot = ledgerCapitalSnapshot(signal.id);
+  const open = snapshot.open;
+  const sameDirection = open.filter(item => item.side === signal.side);
+  const sameMarketDirection = sameDirection.filter(item => item.market === signal.market);
+  const sameBase = open.filter(item => baseAssetFromSymbol(item.symbol) === baseAssetFromSymbol(signal.symbol));
+  if (open.length >= ledgerSimulationSettings.maxOpenTrades) {
+    rejectLedgerSimulation(signal, [`Ledger max open trades reached (${ledgerSimulationSettings.maxOpenTrades}).`], candidate.score, qualityGatePassed);
+    return;
+  }
+  if (sameDirection.length >= ledgerSimulationSettings.maxSameDirectionOpen) {
+    rejectLedgerSimulation(signal, [`Max open ${signal.side} exposure reached (${ledgerSimulationSettings.maxSameDirectionOpen}).`], candidate.score, qualityGatePassed);
+    return;
+  }
+  if (sameMarketDirection.length >= ledgerSimulationSettings.maxSameMarketDirectionOpen) {
+    rejectLedgerSimulation(signal, [`Max ${signal.market} ${signal.side} exposure reached (${ledgerSimulationSettings.maxSameMarketDirectionOpen}).`], candidate.score, qualityGatePassed);
+    return;
+  }
+  if (sameBase.length >= ledgerSimulationSettings.maxSameBaseAssetOpen) {
+    rejectLedgerSimulation(signal, [`${baseAssetFromSymbol(signal.symbol)} exposure is already open.`], candidate.score, qualityGatePassed);
+    return;
+  }
+
+  const minNotional = Math.max(ledgerSimulationSettings.minNotionalUsdt, rules.minNotional ?? 0);
+  const slotAllocation = ledgerSimulationSettings.allocationMethod === 'available'
+    ? snapshot.availableCapital
+    : snapshot.deployableCapital / Math.max(1, ledgerSimulationSettings.maxOpenTrades);
+  const allocation = Math.min(snapshot.availableCapital, Math.max(minNotional, slotAllocation));
+  if (!Number.isFinite(allocation) || allocation < minNotional) {
+    rejectLedgerSimulation(signal, [`Available simulated capital ${formatUsdt(snapshot.availableCapital)} is below Binance min notional ${formatUsdt(minNotional)}.`], candidate.score, qualityGatePassed);
+    return;
+  }
+
+  const leverage = signal.market === 'futures' ? ledgerSimulationSettings.futuresLeverage : 1;
+  const requestedNotional = allocation * leverage;
+  let normalizedQuantity: ReturnType<typeof formatBinanceQuantity>;
+  let normalizedEntry = signal.entry;
+  let normalizedTakeProfit = signal.takeProfit;
+  let normalizedStopLoss = signal.stopLoss;
+  try {
+    normalizedQuantity = formatBinanceQuantity(requestedNotional / Math.max(signal.entry, 0.00000001), rules, 'floor');
+    normalizedEntry = Number(formatBinancePrice(signal.entry, rules));
+    normalizedTakeProfit = Number(formatBinancePrice(signal.takeProfit, rules));
+    normalizedStopLoss = Number(formatBinancePrice(signal.stopLoss, rules));
+  } catch (error) {
+    rejectLedgerSimulation(signal, [error instanceof Error ? error.message : 'Unable to normalize quantity or price with Binance filters.'], candidate.score, qualityGatePassed);
+    return;
+  }
+  const notional = normalizedQuantity.quantity * normalizedEntry;
+  if (notional < minNotional) {
+    rejectLedgerSimulation(signal, [`Normalized notional ${formatUsdt(notional)} is below Binance min notional ${formatUsdt(minNotional)}.`], candidate.score, qualityGatePassed);
+    return;
+  }
+  const riskAmount = notional * (signal.riskPct / 100);
+  const riskPctOfCapital = snapshot.currentCapital > 0 ? (riskAmount / snapshot.currentCapital) * 100 : Infinity;
+  if (riskPctOfCapital > ledgerSimulationSettings.riskPerTradePct) {
+    rejectLedgerSimulation(signal, [`Trade risk ${riskPctOfCapital.toFixed(2)}% exceeds simulated risk limit ${ledgerSimulationSettings.riskPerTradePct.toFixed(2)}%.`], candidate.score, qualityGatePassed);
+    return;
+  }
+
+  signal.ledgerSimulationStatus = 'accepted';
+  signal.ledgerSimulationNotes = [
+    ...softNotes,
+    `Sim accepted with ${formatUsdt(allocation)} allocated capital and ${formatUsdt(notional)} Binance notional.`
+  ];
+  signal.ledgerPnlEligible = true;
+  signal.ledgerAvailableCapitalUsdt = snapshot.availableCapital;
+  signal.ledgerAllocationUsdt = allocation;
+  signal.ledgerNotionalUsdt = notional;
+  signal.ledgerQuantity = normalizedQuantity.quantity;
+  signal.ledgerEstimatedFeeUsdt = notional * (ledgerFeeRatePct(signal.market) / 100);
+  signal.ledgerEstimatedSlippageUsdt = notional * (ledgerSimulationSettings.slippagePct / 100);
+  signal.ledgerRiskAmountUsdt = riskAmount;
+  signal.ledgerRiskPctOfCapital = riskPctOfCapital;
+  signal.ledgerMinNotionalUsdt = minNotional;
+  signal.ledgerNormalizedEntry = normalizedEntry;
+  signal.ledgerNormalizedTakeProfit = normalizedTakeProfit;
+  signal.ledgerNormalizedStopLoss = normalizedStopLoss;
 }
 
 function isHiddenExecutionFailure(notes?: string[]) {
@@ -2446,6 +2693,7 @@ async function processLedgerExecutions() {
   const executableSignals = signals
     .filter(signal =>
       signal.status === 'OPEN'
+      && countsInLedgerSimulation(signal)
       && (!signal.executionStatus || signal.executionStatus === 'pending')
     )
     .reverse();
@@ -2715,6 +2963,11 @@ function shouldSendPrivateTelegramTradeEvent(signal: TradeSignal, subscriber: Te
   return false;
 }
 
+function extractScoreFromReason(reason: string) {
+  const score = Number(reason.match(/\bScore\s+(-?\d+(?:\.\d+)?)/i)?.[1]);
+  return Number.isFinite(score) ? score : null;
+}
+
 function buildSignalNotificationPayload(signal: TradeSignal) {
   const venue = signal.market === 'futures' ? `FUTURES x${Math.max(1, signal.executionLeverage ?? liveExecutionRules.futuresLeverage)}` : 'SPOT';
   const executionLabel = signal.executionStatus ?? 'ledger_generated';
@@ -2768,7 +3021,7 @@ function loadState() {
     selectedStrategies = new Set(strategies.map(strategy => strategy.id));
     return;
   }
-  const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as { signals?: TradeSignal[]; notifications?: typeof notifications; nextSignalId?: number; selectedStrategies?: string[]; selectedTimeframes?: Timeframe[]; selectedExitMode?: ExitMode; selectedExitModes?: ExitMode[]; selectedMarketScope?: StrategyMarketScope; liveExecutionRules?: Partial<LiveExecutionRules>; telegramRuntimeSettings?: Partial<TelegramRuntimeSettings> };
+  const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as { signals?: TradeSignal[]; notifications?: typeof notifications; nextSignalId?: number; selectedStrategies?: string[]; selectedTimeframes?: Timeframe[]; selectedExitMode?: ExitMode; selectedExitModes?: ExitMode[]; selectedMarketScope?: StrategyMarketScope; liveExecutionRules?: Partial<LiveExecutionRules>; ledgerSimulationSettings?: Partial<LedgerSimulationSettings>; telegramRuntimeSettings?: Partial<TelegramRuntimeSettings> };
   const signalRetentionStart = Date.now() - SIGNAL_RETENTION_MS;
   signals.push(...(data.signals ?? []).filter(signal => signal.openedAt >= signalRetentionStart));
   notifications.push(...(data.notifications ?? []));
@@ -2827,6 +3080,12 @@ function loadState() {
       portfolioFloorLockPct: Math.max(0, Math.min(200, toFiniteNumber(data.liveExecutionRules.portfolioFloorLockPct, liveExecutionRules.portfolioFloorLockPct)))
     };
   }
+  if (data.ledgerSimulationSettings) {
+    ledgerSimulationSettings = buildLedgerSimulationSettingsPatch({
+      ...ledgerSimulationSettings,
+      ...data.ledgerSimulationSettings
+    });
+  }
   if (data.telegramRuntimeSettings) {
     telegramRuntimeSettings = {
       publicChannelEnabled: data.telegramRuntimeSettings.publicChannelEnabled !== false
@@ -2858,6 +3117,23 @@ function loadState() {
       : liveExecutionRules.executionMode === 'live'
         ? 'live_accepted'
         : 'test_accepted';
+      repairedState = true;
+    }
+    if (!signal.ledgerSimulationStatus) {
+      const allocation = Math.max(
+        ledgerSimulationSettings.minNotionalUsdt,
+        ledgerSimulationSettings.startingCapitalUsdt * (1 - ledgerSimulationSettings.reserveRatio / 100) / ledgerSimulationSettings.maxOpenTrades
+      );
+      signal.ledgerSimulationStatus = 'accepted';
+      signal.ledgerSimulationNotes = signal.ledgerSimulationNotes ?? ['Migrated legacy ledger trade into simulated capital accounting.'];
+      signal.ledgerQualityScore = extractScoreFromReason(signal.reason);
+      signal.ledgerQualityGatePassed = signal.ledgerQualityScore == null ? true : signal.ledgerQualityScore >= 60;
+      signal.ledgerPnlEligible = true;
+      signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.startingCapitalUsdt;
+      signal.ledgerAllocationUsdt = signal.ledgerAllocationUsdt ?? allocation;
+      signal.ledgerNotionalUsdt = signal.ledgerNotionalUsdt ?? allocation;
+      signal.ledgerEstimatedFeeUsdt = signal.ledgerEstimatedFeeUsdt ?? (signal.ledgerNotionalUsdt ?? 0) * (ledgerFeeRatePct(signal.market) / 100);
+      signal.ledgerEstimatedSlippageUsdt = signal.ledgerEstimatedSlippageUsdt ?? (signal.ledgerNotionalUsdt ?? 0) * (ledgerSimulationSettings.slippagePct / 100);
       repairedState = true;
     }
     if (signal.status === 'OPEN') {
@@ -2897,6 +3173,7 @@ function saveState() {
     selectedExitModes: [...selectedExitModes],
     selectedMarketScope,
     liveExecutionRules,
+    ledgerSimulationSettings,
     telegramRuntimeSettings
   }, null, 2));
 }
@@ -5088,11 +5365,12 @@ function hasOpenSameDirectionSignal(symbol: string, market: TradingVenue, side: 
     && signal.market === market
     && signal.side === side
     && signal.status === 'OPEN'
+    && countsInLedgerSimulation(signal)
   );
 }
 
 function openLedgerSignals(market?: TradingVenue) {
-  return signals.filter(signal => signal.status === 'OPEN' && (!market || signal.market === market));
+  return signals.filter(signal => signal.status === 'OPEN' && countsInLedgerSimulation(signal) && (!market || signal.market === market));
 }
 
 function baseAssetFromSymbol(symbol: string) {
@@ -5123,15 +5401,17 @@ function hasExcessCorrelation(candidate: SignalCandidate, selected: SignalCandid
 }
 
 function closedSignalPnl(signal: TradeSignal) {
-  if (signal.status === 'WIN') return signal.closePrice ? percent(signal.entry, signal.closePrice, signal.side) : signal.expectedProfitPct;
-  if (signal.status === 'LOSS') return signal.closePrice ? percent(signal.entry, signal.closePrice, signal.side) : -signal.riskPct;
+  if (!countsInLedgerSimulation(signal)) return 0;
+  if (signal.status === 'WIN') return ledgerSignalPnlPct(signal, signal.closePrice ?? signal.takeProfit);
+  if (signal.status === 'LOSS') return ledgerSignalPnlPct(signal, signal.closePrice ?? signal.stopLoss);
   return 0;
 }
 
 function openSignalPnl(signal: TradeSignal) {
+  if (!countsInLedgerSimulation(signal)) return 0;
   const ticker = (signal.market === 'futures' ? futuresTickers : tickers).get(signal.symbol);
   if (!ticker) return 0;
-  return percent(signal.entry, ticker.price, signal.side);
+  return ledgerSignalPnlPct(signal, ticker.price);
 }
 
 function signalNetPnl(signal: TradeSignal) {
@@ -5327,6 +5607,7 @@ async function scanMarket() {
             && signal.market === market
             && signal.side === side
             && signal.status === 'OPEN'
+            && countsInLedgerSimulation(signal)
             && (Date.now() - signal.openedAt) < signalLockMs
           );
           for (const strategy of active) {
@@ -5351,7 +5632,6 @@ async function scanMarket() {
               candles,
               components: score.components
             };
-            if (!passesQualityGate(candidate)) continue;
             if (hasExcessDirectionalExposure(candidate)) continue;
             rawCandidates.push(candidate);
           }
@@ -5368,6 +5648,7 @@ async function scanMarket() {
           if (hasOpenSameDirectionSignal(candidate.signal.symbol, candidate.market, candidate.signal.side)) continue;
           if (hasExcessDirectionalExposure(candidate)) continue;
           candidate.signal.reason = `${candidate.signal.reason} | Score ${candidate.score.toFixed(1)} | Momentum ${(candidate.components.momentum * 100).toFixed(0)} | Volume ${(candidate.components.volume * 100).toFixed(0)} | Alignment ${(candidate.components.alignment * 100).toFixed(0)} | RR ${(candidate.components.riskReward * 100).toFixed(0)}`;
+          applyLedgerSimulation(candidate);
           signals.unshift(candidate.signal);
           invalidateComputedCaches();
           saveState();
@@ -5441,6 +5722,7 @@ function closeInactiveMarketSignals() {
   const closedSignals: TradeSignal[] = [];
   for (const signal of signals) {
     if (signal.status !== 'OPEN') continue;
+    if (!countsInLedgerSimulation(signal)) continue;
     const venueSymbolsLoaded = signal.market === 'futures' ? futuresSymbols.length > 0 : symbols.length > 0;
     if (!venueSymbolsLoaded) continue;
     const rules = getSymbolRules(signal.symbol, signal.market);
@@ -5489,7 +5771,7 @@ function protectLedgerNetPnl() {
   ledgerNetPnlPeak = Math.max(ledgerNetPnlPeak, current);
   const floor = ledgerNetPnlFloor(ledgerNetPnlPeak);
   if (!Number.isFinite(floor) || current > floor) return;
-  for (const signal of signals.filter(item => item.status === 'OPEN')) {
+  for (const signal of signals.filter(item => item.status === 'OPEN' && countsInLedgerSimulation(item))) {
     const ticker = (signal.market === 'futures' ? futuresTickers : tickers).get(signal.symbol);
     if (!ticker) continue;
     const pnl = percent(signal.entry, ticker.price, signal.side);
@@ -5551,7 +5833,7 @@ async function resetPrivateTelegramWebhook() {
 }
 
 function updateOpenSignals() {
-  for (const signal of signals.filter(s => s.status === 'OPEN')) {
+  for (const signal of signals.filter(s => s.status === 'OPEN' && countsInLedgerSimulation(s))) {
     const ticker = (signal.market === 'futures' ? futuresTickers : tickers).get(signal.symbol);
     if (!ticker) continue;
     const currentPnl = percent(signal.entry, ticker.price, signal.side);
@@ -5569,10 +5851,10 @@ function updateOpenSignals() {
 
 function getStats(): StrategyStats[] {
   return strategies.map(strategy => {
-    const own = signals.filter(s => s.strategyId === strategy.id);
+    const own = signals.filter(s => s.strategyId === strategy.id && countsInLedgerSimulation(s));
     const wins = own.filter(s => s.status === 'WIN').length;
     const losses = own.filter(s => s.status === 'LOSS').length;
-    const live = own.filter(s => s.status === 'OPEN' && countsAsOpenExecution(s.executionStatus)).length;
+    const live = own.filter(s => s.status === 'OPEN').length;
     const closed = wins + losses;
     return {
       strategyId: strategy.id,
@@ -5587,8 +5869,8 @@ function getStats(): StrategyStats[] {
       winShort: own.filter(s => s.status === 'WIN' && s.side === 'SHORT').length,
       lossLong: own.filter(s => s.status === 'LOSS' && s.side === 'LONG').length,
       lossShort: own.filter(s => s.status === 'LOSS' && s.side === 'SHORT').length,
-      openLong: own.filter(s => s.status === 'OPEN' && s.side === 'LONG' && countsAsOpenExecution(s.executionStatus)).length,
-      openShort: own.filter(s => s.status === 'OPEN' && s.side === 'SHORT' && countsAsOpenExecution(s.executionStatus)).length
+      openLong: own.filter(s => s.status === 'OPEN' && s.side === 'LONG').length,
+      openShort: own.filter(s => s.status === 'OPEN' && s.side === 'SHORT').length
     };
   });
 }
@@ -5605,7 +5887,7 @@ function getDashboardPayload() {
   const monitoredFutures = selectedMarketScope === 'spot' ? 0 : futuresSymbols.length;
   dashboardCache = {
     stats: getStats(),
-    liveSignals: signals.filter(s => s.status === 'OPEN' && countsAsOpenExecution(s.executionStatus)).length,
+    liveSignals: signals.filter(s => s.status === 'OPEN' && countsInLedgerSimulation(s)).length,
     totalSignals: signals.length,
     monitored: monitoredSpot + monitoredFutures,
     monitoredSpot,
@@ -5711,7 +5993,7 @@ app.get('/api/tickers', (_req, res) => res.json({ tickers: [...tickers.values()]
 app.get('/api/futures-symbols', (_req, res) => res.json({ symbols: futuresSymbols, count: futuresSymbols.length }));
 app.get('/api/futures-tickers', (_req, res) => res.json({ tickers: [...futuresTickers.values()], count: futuresTickers.size }));
 app.get('/api/open-signal-prices', (_req, res) => {
-  const open = signals.filter(signal => signal.status === 'OPEN');
+  const open = signals.filter(signal => signal.status === 'OPEN' && countsInLedgerSimulation(signal));
   const spotSymbols = new Set(open.filter(signal => signal.market === 'spot').map(signal => signal.symbol));
   const futuresSymbols = new Set(open.filter(signal => signal.market === 'futures').map(signal => signal.symbol));
   res.json({
@@ -5758,6 +6040,27 @@ app.post('/api/strategies/select', requireAdmin, (req, res) => {
 });
 app.get('/api/live-rules', requireAuth, (_req, res) => {
   res.json({ ok: true, rules: liveExecutionRules });
+});
+app.get('/api/ledger-simulation', requireAuth, (_req, res) => {
+  const snapshot = ledgerCapitalSnapshot();
+  res.json({
+    ok: true,
+    settings: ledgerSimulationSettings,
+    snapshot: {
+      startingCapital: snapshot.startingCapital,
+      currentCapital: snapshot.currentCapital,
+      deployableCapital: snapshot.deployableCapital,
+      committedCapital: snapshot.committedCapital,
+      availableCapital: snapshot.availableCapital,
+      openAccepted: snapshot.open.length
+    }
+  });
+});
+app.patch('/api/ledger-simulation', requireAuth, (req, res) => {
+  ledgerSimulationSettings = buildLedgerSimulationSettingsPatch(req.body ?? {});
+  invalidateComputedCaches();
+  saveState();
+  res.json({ ok: true, settings: ledgerSimulationSettings, snapshot: ledgerCapitalSnapshot() });
 });
 app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
   try {
