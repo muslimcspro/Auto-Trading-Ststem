@@ -15193,3 +15193,60 @@ video {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
+
+/* Home major market strip above search */
+.home-search-bridge {
+  display: grid;
+  gap: 12px;
+}
+
+.home-top-market-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.home-top-market-head h2 {
+  font-size: clamp(24px, 2.2vw, 36px);
+  line-height: 1;
+}
+
+.home-top-market-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
+.home-top-market-card {
+  width: 100%;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-top-market-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+}
+
+@media (max-width: 820px) {
+  .home-top-market-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .home-top-market-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .home-top-market-card {
+    min-height: 92px;
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .home-top-market-card strong {
+    font-size: clamp(14px, 4.4vw, 20px);
+  }
+}

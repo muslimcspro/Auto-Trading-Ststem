@@ -1267,6 +1267,7 @@ function HomePage({
   const [leaderMarketMode, setLeaderMarketMode] = useState<MarketMode>('spot');
   const monitoredCount = marketMode === 'spot' ? dashboard.monitoredSpot : dashboard.monitoredFutures;
   const availableCount = marketMode === 'spot' ? dashboard.availableSpot : dashboard.availableFutures;
+  const activeTopMarkets = marketMode === 'spot' ? spotTop : futuresTop;
   const activeLeaders = leaderMarketMode === 'spot'
     ? { gainers: spotGainers, losers: spotLosers }
     : { gainers: futuresGainers, losers: futuresLosers };
@@ -1299,6 +1300,29 @@ function HomePage({
     </section>
 
     <section className="home-search-bridge">
+      <div className="home-top-market-head">
+        <div>
+          <span className="eyebrow">Binance watchlist</span>
+          <h2>Major Markets</h2>
+        </div>
+        <div className="home-market-switch">
+          <button type="button" className={marketMode === 'spot' ? 'active' : ''} onClick={() => setMarketMode('spot')}>Spot</button>
+          <button type="button" className={marketMode === 'futures' ? 'active' : ''} onClick={() => setMarketMode('futures')}>Futures</button>
+        </div>
+      </div>
+      <div className="price-strip home-top-market-strip">
+        {activeTopMarkets.map(item => <button key={`${marketMode}-${item.symbol}`} type="button" className="price-card home-top-market-card" onClick={() => openSymbolChart(item.symbol, marketMode)}>
+          <div className="price-card-head">
+            <span>{item.symbol}</span>
+            <small>{marketMode === 'spot' ? 'Spot' : 'Futures'}</small>
+          </div>
+          <strong>${fmt(item.price)}</strong>
+          <div className="price-card-foot">
+            <small className={item.change24h >= 0 ? 'good' : 'bad'}>{`${item.change24h >= 0 ? '+' : ''}${item.change24h.toFixed(2)}%`}</small>
+            <b>{item.quoteVolume >= 1_000_000 ? `$${(item.quoteVolume / 1_000_000).toFixed(1)}M` : `$${Math.round(item.quoteVolume / 1000)}K`}</b>
+          </div>
+        </button>)}
+      </div>
       <div className="search-panel home-search-panel">
         <Search size={20} />
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder={marketMode === 'spot' ? 'Search spot symbols: BTC, ETH, SOL...' : 'Search futures symbols: BTC, ETH, SOL...'} />
