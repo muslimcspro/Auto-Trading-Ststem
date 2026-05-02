@@ -15765,6 +15765,10 @@ video {
     grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
   }
 
+  .page-dashboard .ledger-wallet-futures .ledger-simulation-grid.wallet-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+
   .page-dashboard .ledger-shared-grid,
   .page-dashboard .ledger-pnl-split,
   .page-dashboard .trade-extremes-row-top,
@@ -15826,6 +15830,19 @@ video {
 
   .page-dashboard .ledger-simulation-grid.wallet-grid {
     gap: 4px;
+  }
+
+  .page-dashboard .ledger-wallet-futures .ledger-simulation-grid.wallet-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+
+  .page-dashboard .ledger-wallet-futures .ledger-simulation-grid label {
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .page-dashboard .ledger-wallet-futures .ledger-simulation-grid span {
+    font-size: 7px;
   }
 
   .page-dashboard .ledger-simulation-grid input,
