@@ -15698,11 +15698,13 @@ video {
 
 @media (max-width: 760px) {
   .page-dashboard .trade-ledger-scroll {
-    overflow-x: hidden !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
   }
   .page-dashboard .trade-ledger {
-    min-width: 0 !important;
-    width: 100% !important;
+    min-width: 1120px !important;
+    width: 1120px !important;
   }
   .page-dashboard .trade-ledger th,
   .page-dashboard .trade-ledger td {
@@ -15719,5 +15721,117 @@ video {
     min-width: 0;
     padding: 2px 3px;
     font-size: 7px;
+  }
+}
+
+/* Dashboard mobile parity: keep the desktop grid/table shape and scale it down. */
+.page-dashboard .sim-ok-table th:nth-child(1), .page-dashboard .sim-ok-table td:nth-child(1) { width: 6.5%; }
+.page-dashboard .sim-ok-table th:nth-child(2), .page-dashboard .sim-ok-table td:nth-child(2) { width: 8%; }
+.page-dashboard .sim-ok-table th:nth-child(3), .page-dashboard .sim-ok-table td:nth-child(3) { width: 13%; }
+.page-dashboard .sim-ok-table th:nth-child(4), .page-dashboard .sim-ok-table td:nth-child(4) { width: 6%; }
+.page-dashboard .sim-ok-table th:nth-child(5), .page-dashboard .sim-ok-table td:nth-child(5) { width: 6%; }
+.page-dashboard .sim-ok-table th:nth-child(6), .page-dashboard .sim-ok-table td:nth-child(6) { width: 7%; }
+.page-dashboard .sim-ok-table th:nth-child(7), .page-dashboard .sim-ok-table td:nth-child(7) { width: 4%; }
+.page-dashboard .sim-ok-table th:nth-child(8), .page-dashboard .sim-ok-table td:nth-child(8),
+.page-dashboard .sim-ok-table th:nth-child(9), .page-dashboard .sim-ok-table td:nth-child(9) { width: 7%; }
+.page-dashboard .sim-ok-table th:nth-child(10), .page-dashboard .sim-ok-table td:nth-child(10) { width: 9%; }
+.page-dashboard .sim-ok-table th:nth-child(11), .page-dashboard .sim-ok-table td:nth-child(11) { width: 7%; text-align: center; }
+.page-dashboard .sim-ok-table th:nth-child(12), .page-dashboard .sim-ok-table td:nth-child(12) { width: 5.5%; text-align: center; }
+.page-dashboard .sim-ok-table th:nth-child(13), .page-dashboard .sim-ok-table td:nth-child(13) { width: 6%; text-align: center; }
+.page-dashboard .sim-ok-table th:nth-child(14), .page-dashboard .sim-ok-table td:nth-child(14) { width: 8%; text-align: center; }
+
+.sim-pnl-stack {
+  align-items: center;
+  justify-items: center;
+  gap: 2px;
+}
+
+.sim-pnl-stack .ledger-pnl-value {
+  min-width: 0;
+  line-height: 1.05;
+}
+
+.sim-pnl-stack small {
+  line-height: 1;
+  text-align: center;
+}
+
+@media (max-width: 820px) {
+  .page-dashboard .ledger-wallet-panels {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .page-dashboard .ledger-simulation-grid.wallet-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
+  .page-dashboard .ledger-shared-grid,
+  .page-dashboard .ledger-pnl-split,
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .page-dashboard .trade-extremes-row-top,
+  .page-dashboard .trade-extremes-row-bottom {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+
+  .page-dashboard .trade-ledger-scroll {
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .page-dashboard .sim-ok-table {
+    width: 1280px !important;
+    min-width: 1280px !important;
+    table-layout: fixed;
+  }
+
+  .page-dashboard .sim-rejected-table {
+    width: 980px !important;
+    min-width: 980px !important;
+    table-layout: fixed;
+  }
+
+  .page-dashboard .trade-ledger th,
+  .page-dashboard .trade-ledger td {
+    padding: 8px 7px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+
+  .page-dashboard .trade-ledger th {
+    font-size: 8px;
+  }
+
+  .page-dashboard .ledger-score,
+  .page-dashboard .ledger-pnl-value,
+  .page-dashboard .ledger-venue-cell strong {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 430px) {
+  .page-dashboard .sim-ok-table {
+    width: 1220px !important;
+    min-width: 1220px !important;
+  }
+
+  .page-dashboard .sim-rejected-table {
+    width: 940px !important;
+    min-width: 940px !important;
+  }
+
+  .page-dashboard .ledger-simulation-grid.wallet-grid {
+    gap: 4px;
+  }
+
+  .page-dashboard .ledger-simulation-grid input,
+  .page-dashboard .ledger-simulation-grid select {
+    min-height: 26px;
+    padding: 4px 5px;
+    font-size: 9px;
   }
 }

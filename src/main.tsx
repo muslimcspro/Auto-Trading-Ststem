@@ -541,9 +541,10 @@ const acceptedTradeLedgerColumns = [
   'Entry',
   'Market',
   'TP / SL',
-  'PnL',
   'Allocation',
-  'Score'
+  'Score',
+  'Duration',
+  'PnL'
 ] as const;
 
 const rejectedTradeLedgerColumns = [
@@ -6529,8 +6530,8 @@ function PerformanceChart({
               </tr>
             </thead>
             <tbody>
-              {acceptedTradeRows.length === 0 && <tr><td colSpan={13} className="empty">No SIM OK trades matched this selection.</td></tr>}
-              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={13} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
+              {acceptedTradeRows.length === 0 && <tr><td colSpan={14} className="empty">No SIM OK trades matched this selection.</td></tr>}
+              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={14} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
               {visibleAcceptedTradeRows.map(row => <tr key={row.id} id={`trade-row-${row.id}`} className={`${focusedTradeId === row.id ? 'focused' : ''} chartable-row`} onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
                 <td>{formatTradeLabel(row.id)}</td>
                 <td><strong>{row.symbol}</strong></td>
@@ -6546,11 +6547,17 @@ function PerformanceChart({
                 <td>{fmt(row.entry)}</td>
                 <td>{row.marketPrice ? fmt(row.marketPrice) : '-'}</td>
                 <td>{formatTargetRiskRatio(row)}</td>
-                <td className="ledger-pnl-cell"><b className={`ledger-pnl-value ${row.pnl >= 0 ? 'good' : 'bad'}`}>{row.pnlLabel}</b></td>
                 <td className="ledger-allocation-cell">{`${(row.ledgerAllocationUsdt ?? 0).toFixed(2)} USDT`}</td>
                 <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
+                <td>{formatDuration(row.openedAt, row.status === 'OPEN' ? undefined : row.closedAt)}</td>
+                <td className="ledger-pnl-cell">
+                  <span className="portfolio-pnl-stack sim-pnl-stack">
+                    <b className={`ledger-pnl-value ${row.pnl >= 0 ? 'good' : 'bad'}`}>{`${(((row.ledgerAllocationUsdt ?? 0) * row.pnl) / 100) >= 0 ? '+' : ''}${(((row.ledgerAllocationUsdt ?? 0) * row.pnl) / 100).toFixed(2)} USDT`}</b>
+                    <small className={row.pnl >= 0 ? 'good' : 'bad'}>{row.pnlLabel}</small>
+                  </span>
+                </td>
               </tr>)}
-              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={13} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
+              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={14} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
             </tbody>
           </table>
         </div>
