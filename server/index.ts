@@ -4829,6 +4829,7 @@ async function loadFuturesSymbols() {
         pricePrecision: Number.isFinite(symbol.pricePrecision) ? symbol.pricePrecision : undefined
       };
     });
+  invalidateComputedCaches();
 }
 
 function fallbackSymbolsFromTickers(source: Map<string, PriceTicker>, market: TradingVenue): SymbolInfo[] {
@@ -5568,7 +5569,13 @@ function getStats(): StrategyStats[] {
 }
 
 function getDashboardPayload() {
-  if (!dashboardCacheDirty && dashboardCache) return dashboardCache;
+  if (
+    !dashboardCacheDirty
+    && dashboardCache
+    && dashboardCache.availableSpot === symbols.length
+    && dashboardCache.availableFutures === futuresSymbols.length
+    && dashboardCache.marketScope === selectedMarketScope
+  ) return dashboardCache;
   const monitoredSpot = selectedMarketScope === 'futures' ? 0 : symbols.length;
   const monitoredFutures = selectedMarketScope === 'spot' ? 0 : futuresSymbols.length;
   dashboardCache = {

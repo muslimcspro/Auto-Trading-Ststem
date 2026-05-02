@@ -1265,8 +1265,14 @@ function HomePage({
   openSymbolChart: (symbol: string, market: MarketMode) => void;
 }) {
   const [leaderMarketMode, setLeaderMarketMode] = useState<MarketMode>('spot');
-  const monitoredCount = marketMode === 'spot' ? dashboard.monitoredSpot : dashboard.monitoredFutures;
-  const availableCount = marketMode === 'spot' ? dashboard.availableSpot : dashboard.availableFutures;
+  const fallbackSpotCount = symbols.length;
+  const fallbackFuturesCount = futuresSymbols.length;
+  const monitoredCount = marketMode === 'spot'
+    ? dashboard.monitoredSpot || fallbackSpotCount
+    : dashboard.monitoredFutures || fallbackFuturesCount;
+  const availableCount = marketMode === 'spot'
+    ? dashboard.availableSpot || fallbackSpotCount
+    : dashboard.availableFutures || fallbackFuturesCount;
   const activeTopMarkets = marketMode === 'spot' ? spotTop : futuresTop;
   const activeLeaders = leaderMarketMode === 'spot'
     ? { gainers: spotGainers, losers: spotLosers }
