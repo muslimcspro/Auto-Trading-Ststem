@@ -530,9 +530,9 @@ const acceptedTradeLedgerColumns = [
   'Entry',
   'Market',
   'TP / SL',
+  'PnL',
   'Allocation',
-  'Score',
-  'PnL'
+  'Score'
 ] as const;
 
 const rejectedTradeLedgerColumns = [
@@ -543,8 +543,6 @@ const rejectedTradeLedgerColumns = [
   'Side',
   'Venue',
   'TF',
-  'Entry',
-  'TP / SL',
   'Score'
 ] as const;
 
@@ -6506,9 +6504,9 @@ function PerformanceChart({
                 <td>{fmt(row.entry)}</td>
                 <td>{row.marketPrice ? fmt(row.marketPrice) : '-'}</td>
                 <td>{formatTargetRiskRatio(row)}</td>
-                <td>{`${(row.ledgerAllocationUsdt ?? 0).toFixed(2)} USDT`}</td>
-                <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
                 <td className="ledger-pnl-cell"><b className={`ledger-pnl-value ${row.pnl >= 0 ? 'good' : 'bad'}`}>{row.pnlLabel}</b></td>
+                <td className="ledger-allocation-cell">{`${(row.ledgerAllocationUsdt ?? 0).toFixed(2)} USDT`}</td>
+                <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
               </tr>)}
               {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={13} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
             </tbody>
@@ -6535,8 +6533,6 @@ function PerformanceChart({
                 <td><SideBadge side={row.side} /></td>
                 <td><span className="ledger-venue-cell"><strong>{row.market === 'futures' ? 'Futures x1' : 'Spot'}</strong></span></td>
                 <td>{row.timeframe}</td>
-                <td>{fmt(row.entry)}</td>
-                <td>{formatTargetRiskRatio(row)}</td>
                 <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
               </tr>)}
             </tbody>

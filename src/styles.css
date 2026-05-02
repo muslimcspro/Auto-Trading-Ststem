@@ -6506,29 +6506,27 @@ video {
 .trade-ledger td:nth-child(14) { width: 94px; }
 .trade-ledger th:nth-child(15),
 .trade-ledger td:nth-child(15) { width: 98px; }
-.sim-ok-table th:nth-child(1), .sim-ok-table td:nth-child(1) { width: 76px; }
-.sim-ok-table th:nth-child(2), .sim-ok-table td:nth-child(2) { width: 100px; }
-.sim-ok-table th:nth-child(3), .sim-ok-table td:nth-child(3) { width: 190px; }
-.sim-ok-table th:nth-child(4), .sim-ok-table td:nth-child(4) { width: 82px; }
-.sim-ok-table th:nth-child(5), .sim-ok-table td:nth-child(5) { width: 78px; }
-.sim-ok-table th:nth-child(6), .sim-ok-table td:nth-child(6) { width: 86px; }
-.sim-ok-table th:nth-child(7), .sim-ok-table td:nth-child(7) { width: 50px; }
+.sim-ok-table th:nth-child(1), .sim-ok-table td:nth-child(1) { width: 6.5%; }
+.sim-ok-table th:nth-child(2), .sim-ok-table td:nth-child(2) { width: 8%; }
+.sim-ok-table th:nth-child(3), .sim-ok-table td:nth-child(3) { width: 16%; }
+.sim-ok-table th:nth-child(4), .sim-ok-table td:nth-child(4) { width: 7%; }
+.sim-ok-table th:nth-child(5), .sim-ok-table td:nth-child(5) { width: 7%; }
+.sim-ok-table th:nth-child(6), .sim-ok-table td:nth-child(6) { width: 8%; }
+.sim-ok-table th:nth-child(7), .sim-ok-table td:nth-child(7) { width: 4%; }
 .sim-ok-table th:nth-child(8), .sim-ok-table td:nth-child(8),
-.sim-ok-table th:nth-child(9), .sim-ok-table td:nth-child(9) { width: 88px; }
-.sim-ok-table th:nth-child(10), .sim-ok-table td:nth-child(10) { width: 130px; }
-.sim-ok-table th:nth-child(11), .sim-ok-table td:nth-child(11) { width: 94px; }
-.sim-ok-table th:nth-child(12), .sim-ok-table td:nth-child(12) { width: 70px; text-align: center; }
-.sim-ok-table th:nth-child(13), .sim-ok-table td:nth-child(13) { width: 66px; text-align: right; }
-.sim-rejected-table th:nth-child(1), .sim-rejected-table td:nth-child(1) { width: 76px; }
-.sim-rejected-table th:nth-child(2), .sim-rejected-table td:nth-child(2) { width: 100px; }
-.sim-rejected-table th:nth-child(3), .sim-rejected-table td:nth-child(3) { width: 180px; }
-.sim-rejected-table th:nth-child(4), .sim-rejected-table td:nth-child(4) { width: auto; min-width: 0; }
-.sim-rejected-table th:nth-child(5), .sim-rejected-table td:nth-child(5) { width: 78px; }
-.sim-rejected-table th:nth-child(6), .sim-rejected-table td:nth-child(6) { width: 86px; }
-.sim-rejected-table th:nth-child(7), .sim-rejected-table td:nth-child(7) { width: 50px; }
-.sim-rejected-table th:nth-child(8), .sim-rejected-table td:nth-child(8) { width: 88px; }
-.sim-rejected-table th:nth-child(9), .sim-rejected-table td:nth-child(9) { width: 130px; }
-.sim-rejected-table th:nth-child(10), .sim-rejected-table td:nth-child(10) { width: 70px; text-align: center; }
+.sim-ok-table th:nth-child(9), .sim-ok-table td:nth-child(9) { width: 8%; }
+.sim-ok-table th:nth-child(10), .sim-ok-table td:nth-child(10) { width: 11%; }
+.sim-ok-table th:nth-child(11), .sim-ok-table td:nth-child(11) { width: 6%; text-align: right; }
+.sim-ok-table th:nth-child(12), .sim-ok-table td:nth-child(12) { width: 8%; text-align: center; }
+.sim-ok-table th:nth-child(13), .sim-ok-table td:nth-child(13) { width: 5.5%; text-align: center; }
+.sim-rejected-table th:nth-child(1), .sim-rejected-table td:nth-child(1) { width: 7%; }
+.sim-rejected-table th:nth-child(2), .sim-rejected-table td:nth-child(2) { width: 9%; }
+.sim-rejected-table th:nth-child(3), .sim-rejected-table td:nth-child(3) { width: 18%; }
+.sim-rejected-table th:nth-child(4), .sim-rejected-table td:nth-child(4) { width: 40%; min-width: 0; }
+.sim-rejected-table th:nth-child(5), .sim-rejected-table td:nth-child(5) { width: 8%; }
+.sim-rejected-table th:nth-child(6), .sim-rejected-table td:nth-child(6) { width: 8%; }
+.sim-rejected-table th:nth-child(7), .sim-rejected-table td:nth-child(7) { width: 4%; }
+.sim-rejected-table th:nth-child(8), .sim-rejected-table td:nth-child(8) { width: 6%; text-align: center; }
 .rejected-ledger-scroll { height: 220px; max-height: 220px; }
 .trade-ledger-shell-rejected { margin-top: 12px; border-color: color-mix(in srgb, var(--danger) 24%, var(--border)); }
 .ledger-reject-reason span {
@@ -6573,16 +6571,14 @@ video {
   .page-dashboard .sim-ok-table th:nth-child(11), .page-dashboard .sim-ok-table td:nth-child(11) { width: 9%; }
   .page-dashboard .sim-ok-table th:nth-child(12), .page-dashboard .sim-ok-table td:nth-child(12) { width: 6%; }
   .page-dashboard .sim-ok-table th:nth-child(13), .page-dashboard .sim-ok-table td:nth-child(13) { width: 6%; }
-  .page-dashboard .sim-rejected-table th:nth-child(1), .page-dashboard .sim-rejected-table td:nth-child(1) { width: 9%; }
+  .page-dashboard .sim-rejected-table th:nth-child(1), .page-dashboard .sim-rejected-table td:nth-child(1) { width: 10%; }
   .page-dashboard .sim-rejected-table th:nth-child(2), .page-dashboard .sim-rejected-table td:nth-child(2) { width: 12%; }
   .page-dashboard .sim-rejected-table th:nth-child(3), .page-dashboard .sim-rejected-table td:nth-child(3) { width: 16%; }
-  .page-dashboard .sim-rejected-table th:nth-child(4), .page-dashboard .sim-rejected-table td:nth-child(4) { width: 28%; }
-  .page-dashboard .sim-rejected-table th:nth-child(5), .page-dashboard .sim-rejected-table td:nth-child(5) { width: 8%; }
-  .page-dashboard .sim-rejected-table th:nth-child(6), .page-dashboard .sim-rejected-table td:nth-child(6) { width: 8%; }
+  .page-dashboard .sim-rejected-table th:nth-child(4), .page-dashboard .sim-rejected-table td:nth-child(4) { width: 30%; }
+  .page-dashboard .sim-rejected-table th:nth-child(5), .page-dashboard .sim-rejected-table td:nth-child(5) { width: 9%; }
+  .page-dashboard .sim-rejected-table th:nth-child(6), .page-dashboard .sim-rejected-table td:nth-child(6) { width: 9%; }
   .page-dashboard .sim-rejected-table th:nth-child(7), .page-dashboard .sim-rejected-table td:nth-child(7) { width: 5%; }
-  .page-dashboard .sim-rejected-table th:nth-child(8), .page-dashboard .sim-rejected-table td:nth-child(8) { width: 8%; }
-  .page-dashboard .sim-rejected-table th:nth-child(9), .page-dashboard .sim-rejected-table td:nth-child(9) { width: 11%; }
-  .page-dashboard .sim-rejected-table th:nth-child(10), .page-dashboard .sim-rejected-table td:nth-child(10) { width: 6%; }
+  .page-dashboard .sim-rejected-table th:nth-child(8), .page-dashboard .sim-rejected-table td:nth-child(8) { width: 9%; }
   .page-dashboard .ledger-score,
   .page-dashboard .ledger-pnl-value,
   .page-dashboard .ledger-venue-cell strong {
@@ -6602,7 +6598,8 @@ video {
   }
 }
 .ledger-score-cell,
-.ledger-pnl-cell {
+.ledger-pnl-cell,
+.ledger-allocation-cell {
   text-align: center;
 }
 .ledger-score {
