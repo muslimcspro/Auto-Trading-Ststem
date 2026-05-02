@@ -3414,6 +3414,19 @@ function broadcast(type: string, payload: unknown) {
   wss.clients.forEach(client => client.readyState === WebSocket.OPEN && client.send(data));
 }
 
+wss.on('connection', client => {
+  if (client.readyState !== WebSocket.OPEN) return;
+  client.send(JSON.stringify({
+    type: 'prices',
+    payload: {
+      ...buildPricesBroadcastPayload(),
+      spotUpdates: [...tickers.values()],
+      futuresUpdates: [...futuresTickers.values()]
+    }
+  }));
+  client.send(JSON.stringify({ type: 'dashboard', payload: getDashboardPayload() }));
+});
+
 async function notify(title: string, message: string, level: 'info' | 'win' | 'loss' = 'info') {
   const item = { id: Date.now(), time: Date.now(), title, message, level };
   notifications.unshift(item);
@@ -5769,6 +5782,16 @@ app.get('/api/symbols', (_req, res) => res.json({ symbols, count: symbols.length
 app.get('/api/tickers', (_req, res) => res.json({ tickers: [...tickers.values()], count: tickers.size }));
 app.get('/api/futures-symbols', (_req, res) => res.json({ symbols: futuresSymbols, count: futuresSymbols.length }));
 app.get('/api/futures-tickers', (_req, res) => res.json({ tickers: [...futuresTickers.values()], count: futuresTickers.size }));
+app.get('/api/open-signal-prices', (_req, res) => {
+  const open = signals.filter(signal => signal.status === 'OPEN');
+  const spotSymbols = new Set(open.filter(signal => signal.market === 'spot').map(signal => signal.symbol));
+  const futuresSymbols = new Set(open.filter(signal => signal.market === 'futures').map(signal => signal.symbol));
+  res.json({
+    spotUpdates: [...spotSymbols].map(symbol => tickers.get(symbol)).filter(Boolean),
+    futuresUpdates: [...futuresSymbols].map(symbol => futuresTickers.get(symbol)).filter(Boolean),
+    updatedAt: Date.now()
+  });
+});
 app.get('/api/chart', async (req, res) => {
   try {
     const symbol = String(req.query.symbol ?? '').trim().toUpperCase();

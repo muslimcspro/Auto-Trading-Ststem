@@ -639,26 +639,29 @@ function App() {
     let socket: WebSocket | null = null;
     let reconnectTimeout = 0;
     let closed = false;
+    const applyTickerUpdates = (spotUpdates?: Ticker[], futuresUpdates?: Ticker[]) => {
+      if (Array.isArray(spotUpdates)) {
+        setTickers(prev => {
+          const next = new Map(prev);
+          for (const ticker of spotUpdates) next.set(ticker.symbol, ticker);
+          return next;
+        });
+      }
+      if (Array.isArray(futuresUpdates)) {
+        setFuturesTickers(prev => {
+          const next = new Map(prev);
+          for (const ticker of futuresUpdates) next.set(ticker.symbol, ticker);
+          return next;
+        });
+      }
+    };
 
     const connectSocket = () => {
       socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`);
         socket.onmessage = event => {
           const { type, payload } = JSON.parse(event.data);
           if (type === 'prices') {
-            if (Array.isArray(payload.spotUpdates)) {
-              setTickers(prev => {
-                const next = new Map(prev);
-                for (const ticker of payload.spotUpdates as Ticker[]) next.set(ticker.symbol, ticker);
-                return next;
-              });
-            }
-            if (Array.isArray(payload.futuresUpdates)) {
-              setFuturesTickers(prev => {
-                const next = new Map(prev);
-                for (const ticker of payload.futuresUpdates as Ticker[]) next.set(ticker.symbol, ticker);
-                return next;
-              });
-            }
+            applyTickerUpdates(payload.spotUpdates, payload.futuresUpdates);
             setSpotTop(payload.spotTop ?? []);
             setFuturesTop(payload.futuresTop ?? []);
             setSpotGainers(payload.spotGainers ?? []);
@@ -731,11 +734,26 @@ function App() {
         })
         .catch(() => undefined);
     }, 60000);
+    const liveLedgerRefresh = setInterval(() => {
+      Promise.all([
+        api<{ spotUpdates: Ticker[]; futuresUpdates: Ticker[] }>('/api/open-signal-prices'),
+        api<{ signals: Signal[] }>('/api/signals'),
+        api<{ stats: Stat[]; liveSignals: number; totalSignals: number; monitored: number; monitoredSpot: number; monitoredFutures: number; availableSpot: number; availableFutures: number; selectedStrategies: number; marketScope: StrategyMarketScope; exchange: string }>('/api/dashboard')
+      ])
+        .then(([priceResponse, signalResponse, dashboardResponse]) => {
+          applyTickerUpdates(priceResponse.spotUpdates, priceResponse.futuresUpdates);
+          setSignals(signalResponse.signals);
+          setDashboard(dashboardResponse);
+          setStats(dashboardResponse.stats);
+        })
+        .catch(() => undefined);
+    }, 2500);
     return () => {
       closed = true;
       if (reconnectTimeout) window.clearTimeout(reconnectTimeout);
       socket?.close();
       clearInterval(refresh);
+      clearInterval(liveLedgerRefresh);
     };
   }, [alertsEnabled, toastDuration]);
 
