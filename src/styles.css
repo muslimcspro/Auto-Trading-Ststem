@@ -6260,6 +6260,9 @@ video {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+.ledger-pnl-split-wide {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
 .ledger-pnl-split article {
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -6611,6 +6614,7 @@ video {
 .sim-rejected-table th:nth-child(6), .sim-rejected-table td:nth-child(6) { width: 8%; }
 .sim-rejected-table th:nth-child(7), .sim-rejected-table td:nth-child(7) { width: 4%; }
 .sim-rejected-table th:nth-child(8), .sim-rejected-table td:nth-child(8) { width: 6%; text-align: center; }
+.accepted-simulation-pnl-split,
 .all-strategy-pnl-split { margin-top: 12px; }
 .trade-ledger-shell-all-strategy { margin-top: 12px; border-color: color-mix(in srgb, var(--accent) 22%, var(--border)); }
 .all-strategy-table th:nth-child(1), .all-strategy-table td:nth-child(1) { width: 7%; }
