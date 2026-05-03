@@ -6503,6 +6503,7 @@ function PerformanceChart({
               <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.futuresMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMaxOpenTrades: Number(event.target.value) })} /></label>
               <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.futuresMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMinNotionalUsdt: Number(event.target.value) })} /></label>
               <label><span>Leverage</span><input type="number" min={1} max={20} step={1} value={ledgerSimulationDraft.futuresLeverage} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresLeverage: Number(event.target.value) })} /></label>
+              <label><span>Direction</span><select value={ledgerSimulationDraft.allowedDirection} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allowedDirection: event.target.value as LedgerSimulationSettings['allowedDirection'] })}><option value="both">Both</option><option value="long-only">Long only</option><option value="short-only">Short only</option></select></label>
             </div>
           </section>
         </div>
@@ -6511,7 +6512,6 @@ function PerformanceChart({
           <label><span>Slip %</span><input type="number" min={0} max={5} step={0.01} value={ledgerSimulationDraft.slippagePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, slippagePct: Number(event.target.value) })} /></label>
           <label><span>Allocation</span><select value={ledgerSimulationDraft.allocationMethod} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allocationMethod: event.target.value as LedgerSimulationSettings['allocationMethod'] })}><option value="equal">Equal slots</option><option value="available">Use available</option></select></label>
           <label><span>Market Scope</span><select value={ledgerSimulationDraft.marketScope} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, marketScope: event.target.value as LedgerSimulationSettings['marketScope'] })}><option value="both">Spot + Futures</option><option value="spot">Spot only</option><option value="futures">Futures only</option></select></label>
-          <label><span>Direction</span><select value={ledgerSimulationDraft.allowedDirection} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allowedDirection: event.target.value as LedgerSimulationSettings['allowedDirection'] })}><option value="both">Both</option><option value="long-only">Long only</option><option value="short-only">Short only</option></select></label>
         </div>
       </div>}
         {tradeRows.length === 0 && <p className="empty">No trades generated for this selection yet.</p>}
