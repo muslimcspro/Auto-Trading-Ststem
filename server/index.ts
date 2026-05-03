@@ -1975,8 +1975,8 @@ function applyLedgerSimulationToSignal(signal: TradeSignal, sourceSignals = sign
   if (!ledgerSimulationSettings.enabled) notes.push('Ledger simulation disabled');
   if (ledgerSimulationSettings.marketScope !== 'both' && ledgerSimulationSettings.marketScope !== signal.market) notes.push('Market scope not allowed');
   if (signal.market === 'spot' && signal.side === 'SHORT') notes.push('Spot short not supported');
-  if (ledgerSimulationSettings.allowedDirection === 'long-only' && signal.side === 'SHORT') notes.push('Direction not allowed');
-  if (ledgerSimulationSettings.allowedDirection === 'short-only' && signal.side === 'LONG') notes.push('Direction not allowed');
+  if (signal.market === 'futures' && ledgerSimulationSettings.allowedDirection === 'long-only' && signal.side === 'SHORT') notes.push('Direction not allowed');
+  if (signal.market === 'futures' && ledgerSimulationSettings.allowedDirection === 'short-only' && signal.side === 'LONG') notes.push('Direction not allowed');
   if (duplicateOpen) notes.push('Duplicate symbol open');
   if (snapshot.open.length >= venueMaxOpen) notes.push(`${signal.market === 'spot' ? 'Spot' : 'Futures'} max open reached`);
   if (snapshot.availableCapital <= 0) notes.push('No available capital');
