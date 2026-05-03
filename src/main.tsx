@@ -16,6 +16,7 @@ type StrategyMarketScope = 'spot' | 'futures' | 'all';
 type Strategy = { id: string; name: string; risk: Risk; marketScope?: StrategyMarketScope; description: string };
 type Signal = {
   id: number;
+  sourceSignalId?: number;
   market: MarketMode;
   strategyId: string;
   strategyName: string;
@@ -654,6 +655,7 @@ function App() {
   const [exitModes, setExitModes] = useState<Set<ExitMode>>(new Set(['balanced']));
   const [strategyMarketScope, setStrategyMarketScope] = useState<StrategyMarketScope>('all');
   const [signals, setSignals] = useState<Signal[]>([]);
+  const [executionSignals, setExecutionSignals] = useState<Signal[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [toasts, setToasts] = useState<Notification[]>([]);
   const [stats, setStats] = useState<Stat[]>([]);
@@ -704,10 +706,11 @@ function App() {
       api<{ tickers: Ticker[] }>('/api/futures-tickers'),
       api<{ strategies: Strategy[]; selected: string[]; timeframes: Timeframe[]; exitModes: ExitMode[]; marketScope: StrategyMarketScope }>('/api/strategies'),
       api<{ signals: Signal[] }>('/api/signals'),
+      api<{ signals: Signal[] }>('/api/execution-signals'),
       api<{ notifications: Notification[] }>('/api/notifications'),
       api<{ stats: Stat[]; liveSignals: number; totalSignals: number; monitored: number; monitoredSpot: number; monitoredFutures: number; availableSpot: number; availableFutures: number; selectedStrategies: number; marketScope: StrategyMarketScope; exchange: string }>('/api/dashboard'),
       api<HomeIntelResponse>('/api/home-intel')
-    ]).then(([s, t, fs, ft, st, sig, n, d, intel]) => {
+    ]).then(([s, t, fs, ft, st, sig, execSig, n, d, intel]) => {
       const spotMap = new Map(t.tickers.map(x => [x.symbol, x]));
       const futuresMap = new Map(ft.tickers.map(x => [x.symbol, x]));
       setSymbols(s.symbols);
@@ -726,6 +729,7 @@ function App() {
       setExitModes(new Set(st.exitModes?.length ? st.exitModes : ['balanced']));
       setStrategyMarketScope(st.marketScope);
       setSignals(sig.signals);
+      setExecutionSignals(execSig.signals);
       setNotifications(n.notifications);
       setStats(d.stats);
       setDashboard(d);
@@ -780,10 +784,16 @@ function App() {
           }
           if (type === 'signal') {
             setSignals(prev => [payload, ...prev.filter(item => item.id !== payload.id)]);
-            window.dispatchEvent(new CustomEvent(livePortfolioRefreshEvent));
           }
           if (type === 'signalClosed') {
             setSignals(prev => prev.map(s => s.id === payload.id ? payload : s));
+          }
+          if (type === 'executionSignal') {
+            setExecutionSignals(prev => [payload, ...prev.filter(item => item.id !== payload.id)]);
+            window.dispatchEvent(new CustomEvent(livePortfolioRefreshEvent));
+          }
+          if (type === 'executionSignalClosed') {
+            setExecutionSignals(prev => prev.map(s => s.id === payload.id ? payload : s));
             window.dispatchEvent(new CustomEvent(livePortfolioRefreshEvent));
           }
           if (type === 'notification') {
@@ -798,7 +808,6 @@ function App() {
           if (type === 'dashboard') {
             setDashboard(prev => ({ ...prev, ...payload }));
             setStats(payload.stats);
-            window.dispatchEvent(new CustomEvent(livePortfolioRefreshEvent));
           }
         };
       socket.onclose = () => {
@@ -817,14 +826,16 @@ function App() {
         api<{ tickers: Ticker[] }>('/api/tickers'),
         api<{ tickers: Ticker[] }>('/api/futures-tickers'),
         api<{ signals: Signal[] }>('/api/signals'),
+        api<{ signals: Signal[] }>('/api/execution-signals'),
         api<{ notifications: Notification[] }>('/api/notifications'),
         api<{ stats: Stat[]; liveSignals: number; totalSignals: number; monitored: number; monitoredSpot: number; monitoredFutures: number; availableSpot: number; availableFutures: number; selectedStrategies: number; marketScope: StrategyMarketScope; exchange: string }>('/api/dashboard'),
         api<HomeIntelResponse>('/api/home-intel')
       ])
-        .then(([spotResponse, futuresResponse, signalResponse, notificationResponse, dashboardResponse, intelResponse]) => {
+        .then(([spotResponse, futuresResponse, signalResponse, executionSignalResponse, notificationResponse, dashboardResponse, intelResponse]) => {
           setTickers(new Map(spotResponse.tickers.map(x => [x.symbol, x])));
           setFuturesTickers(new Map(futuresResponse.tickers.map(x => [x.symbol, x])));
           setSignals(signalResponse.signals);
+          setExecutionSignals(executionSignalResponse.signals);
           setNotifications(notificationResponse.notifications);
           setDashboard(dashboardResponse);
           setStats(dashboardResponse.stats);
@@ -836,11 +847,13 @@ function App() {
       Promise.all([
         api<{ spotUpdates: Ticker[]; futuresUpdates: Ticker[] }>('/api/open-signal-prices'),
         api<{ signals: Signal[] }>('/api/signals'),
+        api<{ signals: Signal[] }>('/api/execution-signals'),
         api<{ stats: Stat[]; liveSignals: number; totalSignals: number; monitored: number; monitoredSpot: number; monitoredFutures: number; availableSpot: number; availableFutures: number; selectedStrategies: number; marketScope: StrategyMarketScope; exchange: string }>('/api/dashboard')
       ])
-        .then(([priceResponse, signalResponse, dashboardResponse]) => {
+        .then(([priceResponse, signalResponse, executionSignalResponse, dashboardResponse]) => {
           applyTickerUpdates(priceResponse.spotUpdates, priceResponse.futuresUpdates);
           setSignals(signalResponse.signals);
+          setExecutionSignals(executionSignalResponse.signals);
           setDashboard(dashboardResponse);
           setStats(dashboardResponse.stats);
         })
@@ -871,6 +884,7 @@ function App() {
     setChartOpen(true);
   };
   const deferredSignals = useDeferredValue(signals);
+  const deferredExecutionSignals = useDeferredValue(executionSignals);
   const deferredNotifications = useDeferredValue(notifications);
   const deferredStats = useDeferredValue(stats);
   const deferredTickers = useDeferredValue(tickers);
@@ -952,7 +966,7 @@ function App() {
           selected={selected}
           labStrategyIds={labStrategyIds}
         />}
-        {page === 'auto-trade' && <AutoTradePage signals={deferredSignals} strategies={strategies} labStrategyIds={labStrategyIds} setLabStrategyIds={setLabStrategyIds} strategyMarketScope={strategyMarketScope} tickers={tickers} futuresTickers={futuresTickers} selected={selected} timeframes={timeframes} saveSelection={saveSelection} />}
+        {page === 'auto-trade' && <AutoTradePage signals={deferredExecutionSignals} strategies={strategies} labStrategyIds={labStrategyIds} setLabStrategyIds={setLabStrategyIds} strategyMarketScope={strategyMarketScope} tickers={tickers} futuresTickers={futuresTickers} selected={selected} timeframes={timeframes} saveSelection={saveSelection} />}
       </main>
       <ToastStack notifications={toasts} onDismiss={(id) => setToasts(prev => prev.filter(item => item.id !== id))} signals={deferredSignals} />
       {chartOpen && <SymbolChartPanel
@@ -6076,7 +6090,9 @@ function PerformanceChart({
     return stamp >= ledgerRangeStart && stamp <= ledgerRangeEnd && marketMatches;
   }), [signals, ledgerRangeStart, ledgerRangeEnd, ledgerMarketFilter]);
   const ledgerBaseRows = useMemo(() => ledgerBaseSignals.map(signal => {
-    const marketPrice = signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price;
+    const marketPrice = signal.status === 'OPEN'
+      ? signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price
+      : signal.closePrice;
     const pnl = getSignalPnl(signal, marketPrice);
     return {
       ...signal,
@@ -6099,7 +6115,9 @@ function PerformanceChart({
       && tradeQueryMatches;
   }), [ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter, ledgerTimeframeFilter, ledgerExecutionProfileFilter, normalizedLedgerTradeQuery]);
   const tradeRows = useMemo(() => ledgerSignals.map(signal => {
-    const marketPrice = signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price;
+    const marketPrice = signal.status === 'OPEN'
+      ? signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price
+      : signal.closePrice;
     const pnl = getSignalPnl(signal, marketPrice);
     return {
       ...signal,

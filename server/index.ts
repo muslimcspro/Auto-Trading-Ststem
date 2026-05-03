@@ -65,6 +65,7 @@ type SignalDraft = {
 
 type TradeSignal = SignalDraft & {
   id: number;
+  sourceSignalId?: number;
   market: TradingVenue;
   strategyId: string;
   strategyName: string;
@@ -1008,6 +1009,7 @@ let binanceWalletCache: { createdAt: number; payload: BinanceWalletSummary } | n
 const futuresRiskControlCooldown = new Map<string, number>();
 
 const signals: TradeSignal[] = [];
+const executionSignals: TradeSignal[] = [];
 const notifications: { id: number; time: number; title: string; message: string; level: 'info' | 'win' | 'loss' }[] = [];
 const candleCache = new Map<string, { fetchedAt: number; candles: Candle[] }>();
 const scanCursors: Record<TradingVenue, Record<Timeframe, number>> = {
@@ -1761,8 +1763,8 @@ function buildLedgerSimulationSettingsPatch(input: Partial<LedgerSimulationSetti
   };
 }
 
-function getRankedStrategyIds() {
-  return getStats()
+function getRankedStrategyIds(sourceSignals = signals) {
+  return getStats(sourceSignals)
     .map(stat => ({
       strategyId: stat.strategyId,
       rankValue: stat.wins * 3 - stat.losses * 2 + stat.winRate * 0.2 + stat.live * 0.1,
@@ -2154,9 +2156,7 @@ async function closeFuturesPosition(signal: TradeSignal, position: BinanceFuture
   signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), `Binance protection closed: ${reason}`]));
   invalidateComputedCaches();
   saveState();
-  broadcast('signalClosed', signal);
-  const payload = buildSignalCloseNotificationPayload(signal, reason);
-  void notify(payload.title, payload.message, payload.level);
+  broadcast('executionSignalClosed', signal);
   void deliverPrivateTelegramSignalClose(signal, reason);
   return true;
 }
@@ -2196,7 +2196,7 @@ async function closeAllOpenFuturesPositions(reason: string) {
       closed.push(key);
       const amount = Number(position.positionAmt ?? 0);
       const side: Side = amount > 0 ? 'LONG' : 'SHORT';
-      const signal = signals.find(item =>
+      const signal = executionSignals.find(item =>
         item.market === 'futures'
         && item.executionStatus === 'live_accepted'
         && item.status === 'OPEN'
@@ -2211,8 +2211,7 @@ async function closeAllOpenFuturesPositions(reason: string) {
         signal.binanceCloseOrderId = closeResult.closeOrderId || signal.binanceCloseOrderId;
         applyBinanceClosedPnl(signal, await readBinanceClosedFuturesPnl(signal, closeResult.closeOrderId, metrics?.marginBase ?? null));
         signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), `Binance manual close: ${reason}`]));
-        const payload = buildSignalCloseNotificationPayload(signal, reason);
-        void notify(payload.title, payload.message, payload.level);
+        broadcast('executionSignalClosed', signal);
         void deliverPrivateTelegramSignalClose(signal, reason);
       }
     } catch (error) {
@@ -2222,7 +2221,6 @@ async function closeAllOpenFuturesPositions(reason: string) {
   if (closed.length > 0) {
     invalidateComputedCaches();
     saveState();
-    broadcast('dashboard', getDashboardPayload());
   }
   return { closed, failed };
 }
@@ -2265,7 +2263,7 @@ async function closeAllOpenSpotPositions(reason: string) {
       const closeResult = await closeRawSpotBalance(balance.asset, balance.free);
       if (!closeResult) continue;
       closed.push(symbol);
-      const signal = signals.find(item =>
+      const signal = executionSignals.find(item =>
         item.market === 'spot'
         && item.executionStatus === 'live_accepted'
         && item.status === 'OPEN'
@@ -2278,8 +2276,7 @@ async function closeAllOpenSpotPositions(reason: string) {
         signal.closePrice = closePrice || signal.closePrice;
         signal.binanceCloseOrderId = closeResult.closeOrderId || signal.binanceCloseOrderId;
         signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), `Binance spot manual close: ${reason}`]));
-        const payload = buildSignalCloseNotificationPayload(signal, reason);
-        void notify(payload.title, payload.message, payload.level);
+        broadcast('executionSignalClosed', signal);
         void deliverPrivateTelegramSignalClose(signal, reason);
       }
     } catch (error) {
@@ -2289,14 +2286,13 @@ async function closeAllOpenSpotPositions(reason: string) {
   if (closed.length > 0) {
     invalidateComputedCaches();
     saveState();
-    broadcast('dashboard', getDashboardPayload());
   }
   return { closed, failed };
 }
 
 function closeOpenSignalPages(venues: Set<TradingVenue>, reason: string) {
   let closedCount = 0;
-  for (const signal of signals) {
+  for (const signal of executionSignals) {
     if (!venues.has(signal.market) || signal.status !== 'OPEN' || !countsAsOpenExecution(signal.executionStatus)) continue;
     const marketPrice = signal.market === 'futures'
       ? futuresTickers.get(signal.symbol)?.price
@@ -2306,12 +2302,12 @@ function closeOpenSignalPages(venues: Set<TradingVenue>, reason: string) {
     signal.closedAt = Date.now();
     signal.closePrice = closePrice;
     signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), `Manual close page reset: ${reason}`]));
+    broadcast('executionSignalClosed', signal);
     closedCount += 1;
   }
   if (closedCount > 0) {
     invalidateComputedCaches();
     saveState();
-    broadcast('dashboard', getDashboardPayload());
   }
   return closedCount;
 }
@@ -2327,7 +2323,7 @@ function reEnableAllStrategies() {
 async function monitorLiveFuturesProtection() {
   if (liveProtectionBusy) return;
   if (!binanceVaultState.connected || liveExecutionRules.executionMode !== 'live') return;
-  const liveSignals = signals.filter(signal => signal.market === 'futures' && signal.executionStatus === 'live_accepted' && signal.status === 'OPEN');
+  const liveSignals = executionSignals.filter(signal => signal.market === 'futures' && signal.executionStatus === 'live_accepted' && signal.status === 'OPEN');
   if (liveSignals.length === 0) {
     portfolioFloorArmed = false;
     portfolioFloorPeakR = 0;
@@ -2351,9 +2347,7 @@ async function monitorLiveFuturesProtection() {
       signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), hitStop ? 'Binance stop-loss protection filled.' : 'Binance take-profit protection filled.']));
       invalidateComputedCaches();
       saveState();
-      broadcast('signalClosed', signal);
-      const payload = buildSignalCloseNotificationPayload(signal, hitStop ? 'Stop Loss' : 'Take Profit');
-      void notify(payload.title, payload.message, payload.level);
+      broadcast('executionSignalClosed', signal);
       void deliverPrivateTelegramSignalClose(signal, hitStop ? 'Stop Loss' : 'Take Profit');
     }
     const active = liveSignals
@@ -2426,7 +2420,7 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
         ? new Set(selectedStrategies)
         : new Set(selectedStrategies);
   if (rules.ruleToggles.executionSource && allowedStrategyIds.size > 0 && !allowedStrategyIds.has(signal.strategyId)) failedRules.push('Execution Source');
-  const openSignals = signals.filter(item =>
+  const openSignals = executionSignals.filter(item =>
     item.status === 'OPEN'
     && item.market === signal.market
     && countsAsOpenExecution(item.executionStatus)
@@ -2481,7 +2475,7 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
   }
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const closedToday = signals.filter(item =>
+  const closedToday = executionSignals.filter(item =>
     item.market === signal.market
     && item.status !== 'OPEN'
     && countsAsOpenExecution(item.executionStatus)
@@ -2650,11 +2644,12 @@ async function applyExecutionPipeline(signal: TradeSignal) {
 }
 
 async function processLedgerExecutions() {
-  if (ledgerExecutionRunning || !binanceVaultState.connected) return;
-  const executableSignals = signals
+  if (ledgerExecutionRunning) return;
+  syncExecutionSignalsFromDashboard();
+  if (!binanceVaultState.connected) return;
+  const executableSignals = executionSignals
     .filter(signal =>
       signal.status === 'OPEN'
-      && countsInLedgerSimulation(signal)
       && (!signal.executionStatus || signal.executionStatus === 'pending')
     )
     .reverse();
@@ -2665,7 +2660,7 @@ async function processLedgerExecutions() {
       await applyExecutionPipeline(signal);
       invalidateComputedCaches();
       saveState();
-      broadcast('signal', signal);
+      broadcast('executionSignal', signal);
       if (countsAsOpenExecution(signal.executionStatus)) {
         void deliverPrivateTelegramSignal(signal);
       }
@@ -2972,14 +2967,186 @@ async function deliverPrivateTelegramSignalClose(signal: TradeSignal, closeText?
   }
 }
 
+function stripDashboardExecutionState(signal: TradeSignal) {
+  delete signal.executionMode;
+  delete signal.executionVenueLabel;
+  delete signal.executionLeverage;
+  delete signal.executionMarginMode;
+  delete signal.executionStatus;
+  delete signal.executionNotes;
+  delete signal.binanceCloseOrderId;
+  delete signal.binanceTakeProfitOrderId;
+  delete signal.binanceStopLossOrderId;
+  delete signal.binanceRealizedPnlUsdt;
+  delete signal.binanceRoiPct;
+  delete signal.binancePnlReadAt;
+  delete signal.binancePnlSource;
+  delete signal.sourceSignalId;
+}
+
+function enforceDashboardStrictClose(signal: TradeSignal) {
+  if (signal.status === 'WIN') {
+    signal.closePrice = signal.takeProfit;
+  } else if (signal.status === 'LOSS') {
+    signal.closePrice = signal.stopLoss;
+  } else {
+    delete signal.closedAt;
+    delete signal.closePrice;
+  }
+}
+
+function stripExecutionLedgerState(signal: TradeSignal) {
+  delete signal.ledgerSimulationStatus;
+  delete signal.ledgerSimulationNotes;
+  delete signal.ledgerPnlEligible;
+  delete signal.ledgerStartingCapitalUsdt;
+  delete signal.ledgerAvailableCapitalUsdt;
+  delete signal.ledgerAllocationUsdt;
+  delete signal.ledgerNotionalUsdt;
+  delete signal.ledgerQuantity;
+  delete signal.ledgerEstimatedFeeUsdt;
+  delete signal.ledgerEstimatedSlippageUsdt;
+  delete signal.ledgerRiskAmountUsdt;
+  delete signal.ledgerRiskPctOfCapital;
+  delete signal.ledgerMinNotionalUsdt;
+  delete signal.ledgerNormalizedEntry;
+  delete signal.ledgerNormalizedTakeProfit;
+  delete signal.ledgerNormalizedStopLoss;
+}
+
+function createExecutionRecordFromDashboardSignal(signal: TradeSignal): TradeSignal {
+  const executionSignal: TradeSignal = {
+    ...signal,
+    sourceSignalId: signal.id,
+    status: 'OPEN',
+    openedAt: signal.openedAt,
+    plannedExitAt: signal.plannedExitAt,
+    executionMode: liveExecutionRules.executionMode,
+    executionVenueLabel: signal.market === 'futures' ? `Futures ${liveExecutionRules.futuresLeverage}x` : 'Spot',
+    executionLeverage: signal.market === 'futures' ? liveExecutionRules.futuresLeverage : null,
+    executionMarginMode: signal.market === 'futures' ? liveExecutionRules.futuresMarginMode : null,
+    executionStatus: 'pending',
+    executionNotes: ['Imported from dashboard signal and waiting for Auto Trading execution.'],
+    maxFavorablePnlPct: 0,
+    profitLockPct: 0
+  };
+  delete executionSignal.closedAt;
+  delete executionSignal.closePrice;
+  stripExecutionLedgerState(executionSignal);
+  delete executionSignal.binanceCloseOrderId;
+  delete executionSignal.binanceTakeProfitOrderId;
+  delete executionSignal.binanceStopLossOrderId;
+  delete executionSignal.binanceRealizedPnlUsdt;
+  delete executionSignal.binanceRoiPct;
+  delete executionSignal.binancePnlReadAt;
+  delete executionSignal.binancePnlSource;
+  return executionSignal;
+}
+
+function refreshPendingExecutionRecordFromDashboardSignal(executionSignal: TradeSignal, sourceSignal: TradeSignal) {
+  if (countsAsOpenExecution(executionSignal.executionStatus)) return false;
+  const previous = JSON.stringify({
+    market: executionSignal.market,
+    strategyId: executionSignal.strategyId,
+    strategyName: executionSignal.strategyName,
+    symbol: executionSignal.symbol,
+    timeframe: executionSignal.timeframe,
+    exitMode: executionSignal.exitMode,
+    side: executionSignal.side,
+    entry: executionSignal.entry,
+    takeProfit: executionSignal.takeProfit,
+    stopLoss: executionSignal.stopLoss,
+    expectedProfitPct: executionSignal.expectedProfitPct,
+    riskPct: executionSignal.riskPct,
+    confidence: executionSignal.confidence,
+    rr: executionSignal.rr,
+    reason: executionSignal.reason,
+    plannedExitAt: executionSignal.plannedExitAt
+  });
+  executionSignal.market = sourceSignal.market;
+  executionSignal.strategyId = sourceSignal.strategyId;
+  executionSignal.strategyName = sourceSignal.strategyName;
+  executionSignal.symbol = sourceSignal.symbol;
+  executionSignal.timeframe = sourceSignal.timeframe;
+  executionSignal.exitMode = sourceSignal.exitMode;
+  executionSignal.side = sourceSignal.side;
+  executionSignal.entry = sourceSignal.entry;
+  executionSignal.takeProfit = sourceSignal.takeProfit;
+  executionSignal.stopLoss = sourceSignal.stopLoss;
+  executionSignal.expectedProfitPct = sourceSignal.expectedProfitPct;
+  executionSignal.riskPct = sourceSignal.riskPct;
+  executionSignal.confidence = sourceSignal.confidence;
+  executionSignal.rr = sourceSignal.rr;
+  executionSignal.reason = sourceSignal.reason;
+  executionSignal.openedAt = sourceSignal.openedAt;
+  executionSignal.plannedExitAt = sourceSignal.plannedExitAt;
+  executionSignal.sourceSignalId = sourceSignal.id;
+  executionSignal.status = 'OPEN';
+  delete executionSignal.closedAt;
+  delete executionSignal.closePrice;
+  stripExecutionLedgerState(executionSignal);
+  const next = JSON.stringify({
+    market: executionSignal.market,
+    strategyId: executionSignal.strategyId,
+    strategyName: executionSignal.strategyName,
+    symbol: executionSignal.symbol,
+    timeframe: executionSignal.timeframe,
+    exitMode: executionSignal.exitMode,
+    side: executionSignal.side,
+    entry: executionSignal.entry,
+    takeProfit: executionSignal.takeProfit,
+    stopLoss: executionSignal.stopLoss,
+    expectedProfitPct: executionSignal.expectedProfitPct,
+    riskPct: executionSignal.riskPct,
+    confidence: executionSignal.confidence,
+    rr: executionSignal.rr,
+    reason: executionSignal.reason,
+    plannedExitAt: executionSignal.plannedExitAt
+  });
+  return previous !== next;
+}
+
+function syncExecutionSignalsFromDashboard() {
+  const created: TradeSignal[] = [];
+  const touched: TradeSignal[] = [];
+  const bySourceId = new Map<number, TradeSignal>();
+  for (const executionSignal of executionSignals) {
+    const sourceId = executionSignal.sourceSignalId ?? executionSignal.id;
+    if (!bySourceId.has(sourceId)) bySourceId.set(sourceId, executionSignal);
+  }
+  for (const sourceSignal of signals.filter(signal => signal.status === 'OPEN' && countsInLedgerSimulation(signal))) {
+    const existing = bySourceId.get(sourceSignal.id);
+    if (existing) {
+      if (existing.sourceSignalId == null) {
+        existing.sourceSignalId = sourceSignal.id;
+        touched.push(existing);
+      }
+      if (refreshPendingExecutionRecordFromDashboardSignal(existing, sourceSignal)) touched.push(existing);
+      continue;
+    }
+    const executionSignal = createExecutionRecordFromDashboardSignal(sourceSignal);
+    executionSignals.unshift(executionSignal);
+    bySourceId.set(sourceSignal.id, executionSignal);
+    created.push(executionSignal);
+  }
+  const changed = [...created, ...touched];
+  if (changed.length > 0) {
+    invalidateComputedCaches();
+    saveState();
+    for (const signal of changed) broadcast('executionSignal', signal);
+  }
+  return changed;
+}
+
 function loadState() {
   if (!fs.existsSync(STATE_FILE)) {
     selectedStrategies = new Set(strategies.map(strategy => strategy.id));
     return;
   }
-  const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as { signals?: TradeSignal[]; notifications?: typeof notifications; nextSignalId?: number; selectedStrategies?: string[]; selectedTimeframes?: Timeframe[]; selectedExitMode?: ExitMode; selectedExitModes?: ExitMode[]; selectedMarketScope?: StrategyMarketScope; liveExecutionRules?: Partial<LiveExecutionRules>; ledgerSimulationSettings?: Partial<LedgerSimulationSettings>; telegramRuntimeSettings?: Partial<TelegramRuntimeSettings> };
+  const data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as { signals?: TradeSignal[]; executionSignals?: TradeSignal[]; notifications?: typeof notifications; nextSignalId?: number; selectedStrategies?: string[]; selectedTimeframes?: Timeframe[]; selectedExitMode?: ExitMode; selectedExitModes?: ExitMode[]; selectedMarketScope?: StrategyMarketScope; liveExecutionRules?: Partial<LiveExecutionRules>; ledgerSimulationSettings?: Partial<LedgerSimulationSettings>; telegramRuntimeSettings?: Partial<TelegramRuntimeSettings> };
   const signalRetentionStart = Date.now() - SIGNAL_RETENTION_MS;
-  signals.push(...(data.signals ?? []).filter(signal => signal.openedAt >= signalRetentionStart));
+  signals.push(...(data.signals ?? []).filter(signal => signal.openedAt >= signalRetentionStart).map(signal => ({ ...signal })));
+  executionSignals.push(...(data.executionSignals ?? data.signals ?? []).filter(signal => signal.openedAt >= signalRetentionStart).map(signal => ({ ...signal })));
   notifications.push(...(data.notifications ?? []));
   let repairedState = false;
   if (Array.isArray(data.selectedStrategies)) {
@@ -3048,33 +3215,20 @@ function loadState() {
     };
   }
   for (const signal of signals) {
-    if (!signal.executionMode) {
-      signal.executionMode = liveExecutionRules.executionMode;
-      repairedState = true;
-    }
-    if (signal.executionLeverage == null) {
-      signal.executionLeverage = signal.market === 'futures' ? liveExecutionRules.futuresLeverage : null;
-      repairedState = true;
-    }
-    if (signal.executionMarginMode == null) {
-      signal.executionMarginMode = signal.market === 'futures' ? liveExecutionRules.futuresMarginMode : null;
-      repairedState = true;
-    }
-    const desiredVenueLabel = signal.market === 'futures'
-      ? `Futures ${signal.executionLeverage ?? liveExecutionRules.futuresLeverage}x`
-      : 'Spot';
-    if (signal.executionVenueLabel !== desiredVenueLabel) {
-      signal.executionVenueLabel = desiredVenueLabel;
-      repairedState = true;
-    }
-    if (!signal.executionStatus) {
-      signal.executionStatus = signal.status === 'OPEN'
-      ? 'pending'
-      : liveExecutionRules.executionMode === 'live'
-        ? 'live_accepted'
-        : 'test_accepted';
-      repairedState = true;
-    }
+    const hadDashboardExecutionState = signal.executionStatus != null
+      || signal.executionMode != null
+      || signal.executionVenueLabel != null
+      || signal.binanceCloseOrderId != null
+      || signal.binanceTakeProfitOrderId != null
+      || signal.binanceStopLossOrderId != null
+      || signal.binanceRealizedPnlUsdt != null
+      || signal.sourceSignalId != null;
+    const previousClosedAt = signal.closedAt;
+    const previousClosePrice = signal.closePrice;
+    stripDashboardExecutionState(signal);
+    if (hadDashboardExecutionState) repairedState = true;
+    enforceDashboardStrictClose(signal);
+    if (previousClosedAt !== signal.closedAt || previousClosePrice !== signal.closePrice) repairedState = true;
     if (!signal.ledgerSimulationStatus) {
       const allocation = Math.max(
         ledgerSimulationSettings.minNotionalUsdt,
@@ -3101,6 +3255,53 @@ function loadState() {
       }
     }
   }
+  for (const signal of executionSignals) {
+    stripExecutionLedgerState(signal);
+    if (signal.sourceSignalId == null) {
+      const matchingDashboardSignal = signals.find(item => item.id === signal.id);
+      if (matchingDashboardSignal) {
+        signal.sourceSignalId = matchingDashboardSignal.id;
+        repairedState = true;
+      }
+    }
+    if (!signal.executionMode) {
+      signal.executionMode = liveExecutionRules.executionMode;
+      repairedState = true;
+    }
+    if (signal.executionLeverage == null) {
+      signal.executionLeverage = signal.market === 'futures' ? liveExecutionRules.futuresLeverage : null;
+      repairedState = true;
+    }
+    if (signal.executionMarginMode == null) {
+      signal.executionMarginMode = signal.market === 'futures' ? liveExecutionRules.futuresMarginMode : null;
+      repairedState = true;
+    }
+    const desiredVenueLabel = signal.market === 'futures'
+      ? `Futures ${signal.executionLeverage ?? liveExecutionRules.futuresLeverage}x`
+      : 'Spot';
+    if (signal.executionVenueLabel !== desiredVenueLabel) {
+      signal.executionVenueLabel = desiredVenueLabel;
+      repairedState = true;
+    }
+    if (!signal.executionStatus) {
+      signal.executionStatus = signal.status === 'OPEN'
+        ? 'pending'
+        : liveExecutionRules.executionMode === 'live'
+          ? 'live_accepted'
+          : 'test_accepted';
+      repairedState = true;
+    }
+    if (signal.status === 'OPEN') {
+      if (typeof signal.maxFavorablePnlPct !== 'number') {
+        signal.maxFavorablePnlPct = Math.max(0, signalOpenPnlPct(signal, (signal.market === 'futures' ? futuresTickers : tickers).get(signal.symbol)?.price ?? signal.entry));
+        repairedState = true;
+      }
+      if (typeof signal.profitLockPct !== 'number') {
+        signal.profitLockPct = profitLockFromPeak(signal);
+        repairedState = true;
+      }
+    }
+  }
   for (const notification of notifications) {
     const legacyId = notification.title.match(/#(\d+)/)?.[1];
     if (!legacyId) continue;
@@ -3110,7 +3311,7 @@ function loadState() {
       repairedState = true;
     }
   }
-  nextSignalId = Math.max(data.nextSignalId ?? nextSignalId, (signals.at(0)?.id ?? 0) + 1, ...signals.map(signal => signal.id + 1), 1);
+  nextSignalId = Math.max(data.nextSignalId ?? nextSignalId, (signals.at(0)?.id ?? 0) + 1, (executionSignals.at(0)?.id ?? 0) + 1, ...signals.map(signal => signal.id + 1), ...executionSignals.map(signal => signal.id + 1), 1);
   if (repairedState) saveState();
 }
 
@@ -3118,8 +3319,10 @@ function saveState() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const signalRetentionStart = Date.now() - SIGNAL_RETENTION_MS;
   const retainedSignals = signals.filter(signal => signal.openedAt >= signalRetentionStart);
+  const retainedExecutionSignals = executionSignals.filter(signal => signal.openedAt >= signalRetentionStart);
   fs.writeFileSync(STATE_FILE, JSON.stringify({
     signals: retainedSignals,
+    executionSignals: retainedExecutionSignals,
     notifications: notifications.slice(0, 200),
     nextSignalId,
     selectedStrategies: [...selectedStrategies],
@@ -3724,7 +3927,7 @@ type BinancePortfolioLedgerRow = {
 };
 
 function portfolioSignalCandidates(symbol: string, market: TradingVenue, side?: Side) {
-  return signals
+  return executionSignals
     .filter(signal =>
       signal.symbol === symbol
       && signal.market === market
@@ -3854,7 +4057,7 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
     ...new Set([
       ...[...futuresPositions.values()].map(position => String(position.symbol ?? '')),
       ...futuresIncomeRows.map(row => String(row.symbol ?? '')),
-      ...signals.filter(signal => signal.market === 'futures' && countsAsOpenExecution(signal.executionStatus)).map(signal => signal.symbol)
+      ...executionSignals.filter(signal => signal.market === 'futures' && countsAsOpenExecution(signal.executionStatus)).map(signal => signal.symbol)
     ].filter(Boolean))
   ];
   const futuresTrades = filters.marketFilter === 'spot' ? [] : await readFuturesUserTradesForSymbols(futuresSymbols, filters.rangeStart, filters.rangeEnd);
@@ -3862,7 +4065,7 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
     ...new Set([
       ...wallet.balances.filter(balance => balance.asset !== 'USDT' && balance.valueUsdt > 0).map(balance => `${balance.asset}USDT`),
       ...spotOpenOrders.map(order => String(order.symbol ?? '')),
-      ...signals.filter(signal => signal.market === 'spot' && countsAsOpenExecution(signal.executionStatus)).map(signal => signal.symbol)
+      ...executionSignals.filter(signal => signal.market === 'spot' && countsAsOpenExecution(signal.executionStatus)).map(signal => signal.symbol)
     ].filter(Boolean))
   ];
   const spotTrades = filters.marketFilter === 'futures' ? [] : await readSpotTradesForSymbols(spotSymbols, filters.rangeStart, filters.rangeEnd);
@@ -5501,9 +5704,9 @@ function updateOpenSignals() {
   }
 }
 
-function getStats(): StrategyStats[] {
+function getStats(sourceSignals = signals): StrategyStats[] {
   return strategies.map(strategy => {
-    const own = signals.filter(s => s.strategyId === strategy.id && countsInLedgerSimulation(s));
+    const own = sourceSignals.filter(s => s.strategyId === strategy.id && (sourceSignals === signals ? countsInLedgerSimulation(s) : true));
     const wins = own.filter(s => s.status === 'WIN').length;
     const losses = own.filter(s => s.status === 'LOSS').length;
     const live = own.filter(s => s.status === 'OPEN').length;
@@ -5732,6 +5935,7 @@ app.patch('/api/ledger-simulation', requireAuth, (req, res) => {
 });
 app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
   try {
+    syncExecutionSignalsFromDashboard();
     const range = String(req.query.range ?? '24h');
     const customFrom = typeof req.query.customFrom === 'string' ? req.query.customFrom : undefined;
     const customTo = typeof req.query.customTo === 'string' ? req.query.customTo : undefined;
@@ -5745,7 +5949,7 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
     const cacheKey = JSON.stringify({
       summaryOnly: true,
       range, customFrom, customTo, statusFilter, sideFilter, marketFilter, timeframeFilter, modeFilter, acceptedKind, rejectedKind,
-      signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
+      signalVersion: `${executionSignals.length}:${executionSignals[0]?.id ?? 0}:${executionSignals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
     if (cached && Date.now() - cached.createdAt < 3000) {
@@ -5793,7 +5997,7 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
     const marketPriceFor = (signal: TradeSignal) => signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price;
     const pnlFor = (signal: TradeSignal) => percent(signal.entry, typeof signal.closePrice === 'number' ? signal.closePrice : (marketPriceFor(signal) ?? signal.entry), signal.side);
 
-    const generatedBase = signals.filter(signal =>
+    const generatedBase = executionSignals.filter(signal =>
       inRange(signal)
       && marketMatches(signal)
       && timeframeMatches(signal)
@@ -5860,6 +6064,7 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
 });
 app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
   try {
+    syncExecutionSignalsFromDashboard();
     const range = String(req.query.range ?? '24h');
     const customFrom = typeof req.query.customFrom === 'string' ? req.query.customFrom : undefined;
     const customTo = typeof req.query.customTo === 'string' ? req.query.customTo : undefined;
@@ -5875,7 +6080,7 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
     const rejectedQuery = String(req.query.rejectedQuery ?? sharedQuery).trim().toUpperCase();
     const cacheKey = JSON.stringify({
       range, customFrom, customTo, statusFilter, sideFilter, marketFilter, timeframeFilter, modeFilter, acceptedKind, rejectedKind, acceptedQuery, rejectedQuery,
-      signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
+      signalVersion: `${executionSignals.length}:${executionSignals[0]?.id ?? 0}:${executionSignals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
     if (cached && Date.now() - cached.createdAt < 3000) {
@@ -5947,7 +6152,7 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
       const capitalForSignal = signal.market === 'futures'
         ? wallet.futuresTotalUsdt
         : wallet.totalValueUsdt;
-      const openAcceptedForMarket = signals.filter(item =>
+      const openAcceptedForMarket = executionSignals.filter(item =>
         item.market === signal.market
         && countsAsOpenExecution(item.executionStatus)
         && item.status === 'OPEN'
@@ -5994,7 +6199,7 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
       };
     };
 
-    const generatedBase = signals.filter(signal =>
+    const generatedBase = executionSignals.filter(signal =>
       inRange(signal)
       && marketMatches(signal)
       && timeframeMatches(signal)
@@ -6090,16 +6295,19 @@ app.post('/api/live-rules', requireAdmin, (req, res) => {
 });
 app.post('/api/dashboard/reset', requireAdmin, (_req, res) => {
   scanVersion++;
-  const preservedPortfolioLinks = signals.filter(signal => signal.executionStatus === 'live_accepted');
-  signals.splice(0, signals.length, ...preservedPortfolioLinks);
+  signals.splice(0, signals.length);
   notifications.splice(0, notifications.length);
-  nextSignalId = Math.max(1, ...signals.map(signal => signal.id + 1));
+  nextSignalId = Math.max(1, ...signals.map(signal => signal.id + 1), ...executionSignals.map(signal => signal.id + 1));
   invalidateComputedCaches();
   saveState();
   broadcast('dashboard', getDashboardPayload());
   res.json({ ok: true });
 });
 app.get('/api/signals', (_req, res) => res.json({ signals }));
+app.get('/api/execution-signals', (_req, res) => {
+  syncExecutionSignalsFromDashboard();
+  res.json({ signals: executionSignals });
+});
 app.get('/api/notifications', (_req, res) => res.json({ notifications }));
 app.get('/api/dashboard', (_req, res) => res.json(getDashboardPayload()));
 app.get('/api/home-intel', async (_req, res) => {
