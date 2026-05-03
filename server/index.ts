@@ -87,8 +87,6 @@ type TradeSignal = SignalDraft & {
   executionNotes?: string[];
   ledgerSimulationStatus?: 'accepted' | 'rejected';
   ledgerSimulationNotes?: string[];
-  ledgerQualityScore?: number | null;
-  ledgerQualityGatePassed?: boolean;
   ledgerPnlEligible?: boolean;
   ledgerStartingCapitalUsdt?: number;
   ledgerAvailableCapitalUsdt?: number;
@@ -121,17 +119,9 @@ type TradeSignal = SignalDraft & {
 
 type SignalCandidate = {
   signal: TradeSignal;
-  score: number;
   market: TradingVenue;
   timeframe: Timeframe;
   candles: Candle[];
-  components: {
-    momentum: number;
-    volume: number;
-    alignment: number;
-    riskReward: number;
-    diversity: number;
-  };
 };
 
 function countsAsOpenExecution(status?: TradeSignal['executionStatus']) {
@@ -1775,10 +1765,10 @@ function getRankedStrategyIds() {
   return getStats()
     .map(stat => ({
       strategyId: stat.strategyId,
-      score: stat.wins * 3 - stat.losses * 2 + stat.winRate * 0.2 + stat.live * 0.1,
+      rankValue: stat.wins * 3 - stat.losses * 2 + stat.winRate * 0.2 + stat.live * 0.1,
       count: stat.total
     }))
-    .sort((a, b) => b.score - a.score || b.count - a.count || a.strategyId.localeCompare(b.strategyId))
+    .sort((a, b) => b.rankValue - a.rankValue || b.count - a.count || a.strategyId.localeCompare(b.strategyId))
     .map(item => item.strategyId);
 }
 
@@ -1914,8 +1904,6 @@ function formatBinancePrice(price: number, rules: SymbolInfo | null) {
 
 function applyLedgerSimulation(candidate: SignalCandidate) {
   const { signal } = candidate;
-  signal.ledgerQualityScore = candidate.score;
-  signal.ledgerQualityGatePassed = true;
   signal.ledgerSimulationStatus = 'accepted';
   signal.ledgerSimulationNotes = ['Accepted directly from strategy generation.'];
   signal.ledgerPnlEligible = true;
@@ -2354,19 +2342,19 @@ async function monitorLiveFuturesProtection() {
       const marketPrice = futuresTickers.get(signal.symbol)?.price ?? signal.closePrice ?? signal.entry;
       const hitStop = signal.side === 'LONG' ? marketPrice <= signal.stopLoss : marketPrice >= signal.stopLoss;
       const hitTarget = signal.side === 'LONG' ? marketPrice >= signal.takeProfit : marketPrice <= signal.takeProfit;
-      const pnlPct = signalOpenPnlPct(signal, marketPrice);
-      signal.status = hitStop ? 'LOSS' : hitTarget ? 'WIN' : pnlPct >= 0 ? 'WIN' : 'LOSS';
+      if (!hitStop && !hitTarget) continue;
+      signal.status = hitStop ? 'LOSS' : 'WIN';
       signal.closedAt = Date.now();
       signal.closePrice = marketPrice;
       const closeOrderId = hitStop ? signal.binanceStopLossOrderId : hitTarget ? signal.binanceTakeProfitOrderId : signal.binanceCloseOrderId;
       if (closeOrderId) applyBinanceClosedPnl(signal, await readBinanceClosedFuturesPnl(signal, closeOrderId, null));
-      signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), hitStop ? 'Binance stop-loss protection filled.' : hitTarget ? 'Binance take-profit protection filled.' : 'Binance futures position is no longer open.']));
+      signal.executionNotes = Array.from(new Set([...(signal.executionNotes ?? []), hitStop ? 'Binance stop-loss protection filled.' : 'Binance take-profit protection filled.']));
       invalidateComputedCaches();
       saveState();
       broadcast('signalClosed', signal);
-      const payload = buildSignalCloseNotificationPayload(signal, hitStop ? 'Stop Loss' : hitTarget ? 'Take Profit' : 'Futures Position Closed');
+      const payload = buildSignalCloseNotificationPayload(signal, hitStop ? 'Stop Loss' : 'Take Profit');
       void notify(payload.title, payload.message, payload.level);
-      void deliverPrivateTelegramSignalClose(signal, hitStop ? 'Stop Loss' : hitTarget ? 'Take Profit' : 'Futures Position Closed');
+      void deliverPrivateTelegramSignalClose(signal, hitStop ? 'Stop Loss' : 'Take Profit');
     }
     const active = liveSignals
       .filter(signal => signal.status === 'OPEN')
@@ -2936,11 +2924,6 @@ function shouldSendPrivateTelegramTradeEvent(signal: TradeSignal, subscriber: Te
   return false;
 }
 
-function extractScoreFromReason(reason: string) {
-  const score = Number(reason.match(/\bScore\s+(-?\d+(?:\.\d+)?)/i)?.[1]);
-  return Number.isFinite(score) ? score : null;
-}
-
 function buildSignalNotificationPayload(signal: TradeSignal) {
   const venue = signal.market === 'futures' ? `FUTURES x${Math.max(1, signal.executionLeverage ?? liveExecutionRules.futuresLeverage)}` : 'SPOT';
   const executionLabel = signal.executionStatus ?? 'ledger_generated';
@@ -3099,8 +3082,6 @@ function loadState() {
       );
       signal.ledgerSimulationStatus = 'accepted';
       signal.ledgerSimulationNotes = signal.ledgerSimulationNotes ?? ['Migrated legacy ledger trade into simulated capital accounting.'];
-      signal.ledgerQualityScore = extractScoreFromReason(signal.reason);
-      signal.ledgerQualityGatePassed = signal.ledgerQualityScore == null ? true : signal.ledgerQualityScore >= 60;
       signal.ledgerPnlEligible = true;
       signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt;
       signal.ledgerAllocationUsdt = signal.ledgerAllocationUsdt ?? allocation;
@@ -3160,28 +3141,6 @@ function invalidateComputedCaches() {
 const percent = (from: number, to: number, side: Side) =>
   side === 'LONG' ? ((to - from) / from) * 100 : ((from - to) / from) * 100;
 
-const QUALITY_GATE = {
-  spotMinScore: 66,
-  futuresMinScore: 74,
-  spotMinRewardMultiple: 1.8,
-  futuresMinRewardMultiple: 2.4,
-  spotMinConfidence: 66,
-  futuresMinConfidence: 72,
-  spotMinAlignment: 0.55,
-  futuresMinAlignment: 0.68,
-  spotMinVolume: 0.32,
-  futuresMinVolume: 0.42,
-  spotMinAdx: 12,
-  futuresMinAdx: 18,
-  maxSameDirectionOpen: 8,
-  maxSameMarketDirectionOpen: 5,
-  maxSameBaseAssetOpen: 3,
-  maxCorrelatedOpen: 3,
-  maxCorrelation: 0.62,
-  profitArmR: 1,
-  profitGivebackRatio: 0.45
-};
-
 const STRATEGY_PAUSE_RULE = {
   minClosedTrades: 10,
   minWinRate: 52,
@@ -3194,7 +3153,6 @@ let spotLongMarketGateCache: { checkedAt: number; allowed: boolean } | null = nu
 const directionalMarketGateCache = new Map<string, { checkedAt: number; allowed: boolean }>();
 const strategyPauseUntil = new Map<string, number>();
 const symbolPauseUntil = new Map<string, number>();
-let ledgerNetPnlPeak = 0;
 
 function getRangeStartForKey(range: string, customFrom?: string) {
   const now = Date.now();
@@ -3351,19 +3309,19 @@ function pickExitMode(strategyId: string, draft: SignalDraft, timeframe: Timefra
   const recentMove = Math.abs((candles.at(-1)?.close ?? 0) - (candles.at(-10)?.close ?? candles.at(0)?.close ?? 0));
   const trendStrength = entry > 0 ? recentMove / entry : 0;
   const volatilityRatio = atr(candles, 14) / Math.max(entry * 0.0025, 0.0000001);
-  const confidenceScore = clamp((draft.confidence - 60) / 20, 0, 1);
-  const momentumScore = clamp((trendStrength / 0.02) * 0.55 + (volatilityRatio / 2.2) * 0.2 + confidenceScore * 0.25, 0, 1);
+  const confidenceState = clamp((draft.confidence - 60) / 20, 0, 1);
+  const momentumState = clamp((trendStrength / 0.02) * 0.55 + (volatilityRatio / 2.2) * 0.2 + confidenceState * 0.25, 0, 1);
   const quickLean = strategyId === 'momentum-scalp' || strategyId === 'rsi-reversion' || timeframe === '5m';
   const extendedLean = strategyId === 'atr-expansion' || strategyId === 'volume-breakout' || strategyId === 'micro-squeeze' || strategyId === 'bear-trend-short';
 
-  if (enabledModes.has('extended') && (extendedLean || (draft.rr >= 2.1 && momentumScore >= 0.58))) {
+  if (enabledModes.has('extended') && (extendedLean || (draft.rr >= 2.1 && momentumState >= 0.58))) {
     return 'extended' as ExitMode;
   }
-  if (enabledModes.has('quick') && (quickLean || draft.rr <= 1.7 || momentumScore <= 0.42)) {
+  if (enabledModes.has('quick') && (quickLean || draft.rr <= 1.7 || momentumState <= 0.42)) {
     return 'quick' as ExitMode;
   }
   if (enabledModes.has('balanced')) return 'balanced' as ExitMode;
-  if (enabledModes.has('extended') && momentumScore >= 0.48) return 'extended' as ExitMode;
+  if (enabledModes.has('extended') && momentumState >= 0.48) return 'extended' as ExitMode;
   if (enabledModes.has('quick')) return 'quick' as ExitMode;
   return modes[0]!;
 }
@@ -3719,23 +3677,6 @@ function formatUsdt(value: number | undefined) {
   return `${value >= 0 ? '+' : '-'}${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
 }
 
-function extractSignalScore(reason: string) {
-  const score = Number(reason.match(/\bScore\s+(-?\d+(?:\.\d+)?)/i)?.[1]);
-  return Number.isFinite(score) ? score : null;
-}
-
-function scoreToneFromReason(reason: string) {
-  const score = extractSignalScore(reason);
-  if (score == null) return 'unscored';
-  if (score >= 60) return 'green';
-  if (score >= 40) return 'yellow';
-  return 'red';
-}
-
-function scoreMatchesFilter(signal: TradeSignal, filter: string) {
-  return filter === 'all' || scoreToneFromReason(signal.reason) === filter;
-}
-
 type BinanceLivePortfolioFilters = {
   rangeStart: number;
   rangeEnd: number;
@@ -3744,7 +3685,6 @@ type BinanceLivePortfolioFilters = {
   marketFilter: string;
   timeframeFilter: string;
   modeFilter: string;
-  scoreFilter: string;
   acceptedKind: string;
   rejectedKind: string;
   acceptedQuery: string;
@@ -3778,7 +3718,6 @@ type BinancePortfolioLedgerRow = {
   pnlSource: string | null;
   pnlReadAt: number | null;
   pnlLabel: string;
-  score: number | null;
   failedRules: string[];
   allocationAmount: number;
   allocationPct: number;
@@ -3842,7 +3781,6 @@ function rowPassesFilters(row: BinancePortfolioLedgerRow, filters: BinanceLivePo
     && (filters.marketFilter === 'all' || row.market === filters.marketFilter)
     && (filters.timeframeFilter === 'all' || row.timeframe === filters.timeframeFilter)
     && (filters.modeFilter === 'all' || row.exitMode === filters.modeFilter)
-    && (filters.scoreFilter === 'all' || scoreToneFromReason(row.failedRules.join(' ')) === filters.scoreFilter || (row.score == null && filters.scoreFilter === 'unscored'))
     && (!query || tradeLabel.includes(query) || String(row.id).includes(query.replace(/^T-?/, '')));
 }
 
@@ -3977,7 +3915,6 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
       pnlSource: 'Binance futures positionRisk',
       pnlReadAt: Date.now(),
       pnlLabel: formatBinancePortfolioPnl(pnlUsdt, roiPct, roiPct ?? 0),
-      score: extractSignalScore(signal.reason),
       failedRules: [signal.reason],
       allocationAmount: metrics?.signedNotional ?? Number(position.notional ?? 0),
       allocationPct
@@ -4027,7 +3964,6 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
       pnlSource: 'Binance futures income REALIZED_PNL',
       pnlReadAt: readAt || Date.now(),
       pnlLabel: formatBinancePortfolioPnl(realizedPnl, roiPct, roiPct ?? 0),
-      score: extractSignalScore(signal.reason),
       failedRules: [signal.reason],
       allocationAmount: Number(linkedTrade?.quoteQty ?? 0),
       allocationPct: wallet.futuresTotalUsdt > 0 && Number(linkedTrade?.quoteQty ?? 0) > 0 ? (Number(linkedTrade?.quoteQty ?? 0) / wallet.futuresTotalUsdt) * 100 : 0
@@ -4072,7 +4008,6 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
       pnlSource: 'Binance balances + spot myTrades',
       pnlReadAt: Date.now(),
       pnlLabel: formatBinancePortfolioPnl(pnlUsdt, roiPct, roiPct ?? 0),
-      score: extractSignalScore(signal.reason),
       failedRules: [signal.reason],
       allocationAmount: balance.valueUsdt,
       allocationPct: wallet.totalValueUsdt > 0 ? (balance.valueUsdt / wallet.totalValueUsdt) * 100 : 0
@@ -4123,7 +4058,6 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
       pnlSource: 'Binance spot myTrades',
       pnlReadAt: closedAt || Date.now(),
       pnlLabel: formatBinancePortfolioPnl(realizedPnl, roiPct, roiPct ?? 0),
-      score: extractSignalScore(signal.reason),
       failedRules: [signal.reason],
       allocationAmount: sellQuote,
       allocationPct: wallet.totalValueUsdt > 0 ? (sellQuote / wallet.totalValueUsdt) * 100 : 0
@@ -4151,12 +4085,7 @@ async function buildBinanceLivePortfolio(filters: BinanceLivePortfolioFilters) {
     short: analyticsRows.filter(row => row.side === 'SHORT').length,
     marketAll: analyticsRows.length,
     spot: analyticsRows.filter(row => row.market === 'spot').length,
-    futures: analyticsRows.filter(row => row.market === 'futures').length,
-    scoreAll: analyticsRows.length,
-    scoreGreen: analyticsRows.filter(row => row.score != null && row.score >= 60).length,
-    scoreYellow: analyticsRows.filter(row => row.score != null && row.score >= 40 && row.score < 60).length,
-    scoreRed: analyticsRows.filter(row => row.score != null && row.score < 40).length,
-    unscored: analyticsRows.filter(row => row.score == null).length
+    futures: analyticsRows.filter(row => row.market === 'futures').length
   };
   return {
     wallet,
@@ -5239,10 +5168,6 @@ function higherTimeframeFor(timeframe: Timeframe): Timeframe | null {
   return null;
 }
 
-function clampScore(value: number) {
-  return clamp(value, 0, 1);
-}
-
 function normalizeReturns(candles: Candle[], size = 18) {
   const sample = candles.slice(-(size + 1));
   const returns: number[] = [];
@@ -5274,62 +5199,6 @@ function correlation(left: number[], right: number[]) {
   const denominator = Math.sqrt(leftVariance * rightVariance);
   if (!denominator) return 0;
   return numerator / denominator;
-}
-
-async function scoreSignalCandidate(signal: TradeSignal, candles: Candle[], ticker: PriceTicker, market: TradingVenue, timeframe: Timeframe) {
-  const closes = candles.map(candle => candle.close);
-  const direction = signal.side === 'LONG' ? 1 : -1;
-  const emaFast = sma(closes, 9);
-  const emaSlow = sma(closes, 21);
-  const shortMove = percent(closes.at(-6) ?? signal.entry, closes.at(-1) ?? signal.entry, signal.side);
-  const momentumBlend = (
-    clampScore((((emaFast - emaSlow) / Math.max(signal.entry * 0.01, 0.00000001)) * direction + 1) / 2) * 0.55
-    + clampScore((shortMove + 1.6) / 3.2) * 0.45
-  );
-
-  const avgVolume = sma(candles.slice(-24).map(candle => candle.volume), 20);
-  const latestVolume = candles.at(-1)?.volume ?? avgVolume;
-  const volumeImpulse = clampScore((latestVolume / Math.max(avgVolume, 0.00000001) - 0.85) / 1.35);
-  const tickerLiquidity = clampScore((Math.log10(Math.max(ticker.quoteVolume, 1)) - 5.2) / 2.2);
-  const volumeScore = (volumeImpulse * 0.7) + (tickerLiquidity * 0.3);
-
-  const higherTimeframe = higherTimeframeFor(timeframe);
-  let alignmentScore = 0.55;
-  if (higherTimeframe) {
-    const higherCandles = await fetchCandles(signal.symbol, higherTimeframe, market).catch(() => []);
-    if (higherCandles.length >= 30) {
-      const higherCloses = higherCandles.map(candle => candle.close);
-      const higherFast = sma(higherCloses, 9);
-      const higherSlow = sma(higherCloses, 21);
-      const higherRsi = rsi(higherCloses);
-      const slopeSignal = ((higherFast - higherSlow) / Math.max(signal.entry * 0.012, 0.00000001)) * direction;
-      const rsiSignal = signal.side === 'LONG'
-        ? clampScore((higherRsi - 48) / 20)
-        : clampScore((52 - higherRsi) / 20);
-      alignmentScore = clampScore((clampScore((slopeSignal + 1) / 2) * 0.65) + (rsiSignal * 0.35));
-    }
-  }
-
-  const realizedRr = signal.expectedProfitPct / Math.max(signal.riskPct, 0.00000001);
-  const riskRewardScore = clampScore((realizedRr - 1) / 2.4);
-
-  const score = (
-    momentumBlend * 0.35
-    + volumeScore * 0.20
-    + alignmentScore * 0.25
-    + riskRewardScore * 0.20
-  ) * 100;
-
-  return {
-    score,
-    components: {
-      momentum: momentumBlend,
-      volume: volumeScore,
-      alignment: alignmentScore,
-      riskReward: riskRewardScore,
-      diversity: 0
-    }
-  };
 }
 
 function openLedgerSignals(market?: TradingVenue) {
@@ -5482,21 +5351,17 @@ async function scanMarket() {
             const exitMode = pickExitMode(strategy.id, draft, timeframe, candles, selectedExitModes);
             const signal = buildSignal(strategy, draft, ticker, timeframe, candles, exitMode, market);
             if (!signal) continue;
-            const score = await scoreSignalCandidate(signal, candles, ticker, market, timeframe);
             const candidate: SignalCandidate = {
               signal,
-              score: score.score,
               market,
               timeframe,
-              candles,
-              components: score.components
+              candles
             };
             rawCandidates.push(candidate);
           }
         }
         console.log(`[scan] market=${market} timeframe=${timeframe} batch=${batch.length} strategies=${evaluatedStrategies} generated=${rawCandidates.length}`);
         for (const candidate of rawCandidates) {
-          candidate.signal.reason = `${candidate.signal.reason} | Score ${candidate.score.toFixed(1)} | Momentum ${(candidate.components.momentum * 100).toFixed(0)} | Volume ${(candidate.components.volume * 100).toFixed(0)} | Alignment ${(candidate.components.alignment * 100).toFixed(0)} | RR ${(candidate.components.riskReward * 100).toFixed(0)}`;
           applyLedgerSimulation(candidate);
           signals.unshift(candidate.signal);
           invalidateComputedCaches();
@@ -5565,68 +5430,6 @@ function closeLedgerSignal(signal: TradeSignal, status: TradeSignal['status'], c
   const payload = buildSignalCloseNotificationPayload(signal, closeText);
   void notify(payload.title, payload.message, payload.level);
   void deliverPrivateTelegramSignalClose(signal, closeText);
-}
-
-function closeInactiveMarketSignals() {
-  const closedSignals: TradeSignal[] = [];
-  for (const signal of signals) {
-    if (signal.status !== 'OPEN') continue;
-    if (!countsInLedgerSimulation(signal)) continue;
-    const venueSymbolsLoaded = signal.market === 'futures' ? futuresSymbols.length > 0 : symbols.length > 0;
-    if (!venueSymbolsLoaded) continue;
-    const rules = getSymbolRules(signal.symbol, signal.market);
-    if (rules) continue;
-    const ticker = signal.market === 'futures'
-      ? futuresTickers.get(signal.symbol)
-      : tickers.get(signal.symbol);
-    const closePrice = Number.isFinite(ticker?.price) && (ticker?.price ?? 0) > 0
-      ? ticker!.price
-      : signal.entry;
-    const pnl = signalOpenPnlPct(signal, closePrice);
-    signal.status = pnl < 0 ? 'LOSS' : 'WIN';
-    signal.closedAt = Date.now();
-    signal.closePrice = closePrice;
-    signal.executionNotes = Array.from(new Set([
-      ...(signal.executionNotes ?? []),
-      `Closed because Binance no longer lists ${signal.symbol} as TRADING for ${signal.market}.`
-    ]));
-    symbolPauseUntil.set(signal.symbol, Date.now() + 6 * 60 * 60_000);
-    closedSignals.push(signal);
-  }
-  if (closedSignals.length === 0) return;
-  invalidateComputedCaches();
-  saveState();
-  for (const signal of closedSignals) {
-    broadcast('signalClosed', signal);
-  }
-  broadcast('dashboard', getDashboardPayload());
-  console.log(`[ledger] closed ${closedSignals.length} inactive-market open signals`);
-}
-
-function ledgerNetPnl() {
-  return signals.reduce((sum, signal) => sum + signalNetPnl(signal), 0);
-}
-
-function ledgerNetPnlFloor(peak: number) {
-  if (peak >= 20) return peak * 0.72;
-  if (peak >= 10) return peak * 0.62;
-  if (peak >= 5) return peak * 0.48;
-  if (peak >= 3) return peak * 0.35;
-  return -Infinity;
-}
-
-function protectLedgerNetPnl() {
-  const current = ledgerNetPnl();
-  ledgerNetPnlPeak = Math.max(ledgerNetPnlPeak, current);
-  const floor = ledgerNetPnlFloor(ledgerNetPnlPeak);
-  if (!Number.isFinite(floor) || current > floor) return;
-  for (const signal of signals.filter(item => item.status === 'OPEN' && countsInLedgerSimulation(item))) {
-    const ticker = (signal.market === 'futures' ? futuresTickers : tickers).get(signal.symbol);
-    if (!ticker) continue;
-    const pnl = percent(signal.entry, ticker.price, signal.side);
-    closeLedgerSignal(signal, pnl >= 0 ? 'WIN' : 'LOSS', ticker.price, `with Net PnL floor ${current.toFixed(2)}%`);
-  }
-  ledgerNetPnlPeak = Math.max(0, ledgerNetPnl());
 }
 
 async function verifyTelegramDelivery() {
@@ -5937,12 +5740,11 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
     const marketFilter = req.query.market === 'spot' || req.query.market === 'futures' ? req.query.market : 'all';
     const timeframeFilter = typeof req.query.timeframe === 'string' && SUPPORTED_TIMEFRAMES.includes(req.query.timeframe as Timeframe) ? req.query.timeframe as Timeframe : 'all';
     const modeFilter = req.query.mode === 'quick' || req.query.mode === 'balanced' || req.query.mode === 'extended' ? req.query.mode : 'all';
-    const scoreFilter = req.query.score === 'green' || req.query.score === 'yellow' || req.query.score === 'red' || req.query.score === 'unscored' ? req.query.score : 'all';
     const acceptedKind = req.query.acceptedKind === 'live' || req.query.acceptedKind === 'test' ? req.query.acceptedKind : 'all';
     const rejectedKind = req.query.rejectedKind === 'live' || req.query.rejectedKind === 'test' ? req.query.rejectedKind : 'all';
     const cacheKey = JSON.stringify({
       summaryOnly: true,
-      range, customFrom, customTo, statusFilter, sideFilter, marketFilter, timeframeFilter, modeFilter, scoreFilter, acceptedKind, rejectedKind,
+      range, customFrom, customTo, statusFilter, sideFilter, marketFilter, timeframeFilter, modeFilter, acceptedKind, rejectedKind,
       signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
@@ -5997,17 +5799,15 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
       && timeframeMatches(signal)
       && modeMatches(signal)
     );
-    const acceptedAnalyticsBeforeScore = generatedBase.filter(signal =>
+    const acceptedAnalyticsBase = generatedBase.filter(signal =>
       statusMatches(signal)
       && sideMatches(signal)
       && acceptedStatuses.has(signal.executionStatus ?? 'pending')
     );
-    const acceptedAnalyticsBase = acceptedAnalyticsBeforeScore.filter(signal => scoreMatchesFilter(signal, scoreFilter));
     const acceptedBase = acceptedAnalyticsBase.filter(signal => acceptedKindMatches(signal));
     const rejectedBase = generatedBase.filter(signal =>
       !acceptedStatuses.has(signal.executionStatus ?? 'pending')
       && !isHiddenExecutionFailure(signal.executionNotes)
-      && scoreMatchesFilter(signal, scoreFilter)
       && rejectedKindMatches(signal)
     );
     const openPnl = acceptedAnalyticsBase.filter(signal => signal.status === 'OPEN').reduce((sum, signal) => sum + pnlFor(signal), 0);
@@ -6019,7 +5819,6 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
         ? wallet.totalValueUsdt
         : wallet.totalValueUsdt + wallet.futuresTotalUsdt;
     const startingBalance = currentCapital - (closedPnl / 100) * currentCapital;
-    const scoreBase = acceptedAnalyticsBeforeScore;
     const filterCounts = {
       statusAll: acceptedAnalyticsBase.filter(signal => sideMatches(signal)).length,
       open: acceptedAnalyticsBase.filter(signal => sideMatches(signal) && effectiveLiveStatus(signal) === 'OPEN').length,
@@ -6031,12 +5830,7 @@ app.get('/api/portfolio/live-summary', requireAuth, async (req, res) => {
       short: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && signal.side === 'SHORT').length,
       marketAll: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal)).length,
       spot: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal) && signal.market === 'spot').length,
-      futures: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal) && signal.market === 'futures').length,
-      scoreAll: scoreBase.length,
-      scoreGreen: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'green').length,
-      scoreYellow: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'yellow').length,
-      scoreRed: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'red').length,
-      unscored: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'unscored').length
+      futures: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal) && signal.market === 'futures').length
     };
     const payload = {
       ok: true,
@@ -6074,14 +5868,13 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
     const marketFilter = req.query.market === 'spot' || req.query.market === 'futures' ? req.query.market : 'all';
     const timeframeFilter = typeof req.query.timeframe === 'string' && SUPPORTED_TIMEFRAMES.includes(req.query.timeframe as Timeframe) ? req.query.timeframe as Timeframe : 'all';
     const modeFilter = req.query.mode === 'quick' || req.query.mode === 'balanced' || req.query.mode === 'extended' ? req.query.mode : 'all';
-    const scoreFilter = req.query.score === 'green' || req.query.score === 'yellow' || req.query.score === 'red' || req.query.score === 'unscored' ? req.query.score : 'all';
     const acceptedKind = req.query.acceptedKind === 'live' || req.query.acceptedKind === 'test' ? req.query.acceptedKind : 'all';
     const rejectedKind = req.query.rejectedKind === 'live' || req.query.rejectedKind === 'test' ? req.query.rejectedKind : 'all';
     const sharedQuery = String(req.query.query ?? '').trim().toUpperCase();
     const acceptedQuery = String(req.query.acceptedQuery ?? sharedQuery).trim().toUpperCase();
     const rejectedQuery = String(req.query.rejectedQuery ?? sharedQuery).trim().toUpperCase();
     const cacheKey = JSON.stringify({
-      range, customFrom, customTo, statusFilter, sideFilter, marketFilter, timeframeFilter, modeFilter, scoreFilter, acceptedKind, rejectedKind, acceptedQuery, rejectedQuery,
+      range, customFrom, customTo, statusFilter, sideFilter, marketFilter, timeframeFilter, modeFilter, acceptedKind, rejectedKind, acceptedQuery, rejectedQuery,
       signalVersion: `${signals.length}:${signals[0]?.id ?? 0}:${signals[0]?.closedAt ?? 0}:${liveExecutionRules.executionMode}:${liveExecutionRules.maxTrades}:${liveExecutionRules.executionSource}:${liveExecutionRules.venueMode}:${liveExecutionRules.allowedDirection}`
     });
     const cached = livePortfolioCache.get(cacheKey);
@@ -6195,7 +5988,6 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
         pnlLabel: pnlUsdt == null
           ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
           : `${pnlUsdt >= 0 ? '+' : ''}${pnlUsdt.toFixed(2)} USDT\n${roiPct != null && roiPct >= 0 ? '+' : ''}${(roiPct ?? 0).toFixed(2)}%`,
-        score: extractSignalScore(signal.reason),
         failedRules: signal.executionNotes?.length ? signal.executionNotes : [signal.executionStatus ?? 'pending'],
         allocationAmount,
         allocationPct
@@ -6208,12 +6000,11 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
       && timeframeMatches(signal)
       && modeMatches(signal)
     );
-    const acceptedAnalyticsBeforeScore = generatedBase.filter(signal =>
+    const acceptedAnalyticsBase = generatedBase.filter(signal =>
       statusMatches(signal)
       && sideMatches(signal)
       && acceptedStatuses.has(signal.executionStatus ?? 'pending')
     );
-    const acceptedAnalyticsBase = acceptedAnalyticsBeforeScore.filter(signal => scoreMatchesFilter(signal, scoreFilter));
     const acceptedFiltered = acceptedAnalyticsBase.filter(signal =>
       acceptedKindMatches(signal)
       && acceptedQueryMatches(signal)
@@ -6222,7 +6013,6 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
     const rejectedFiltered = generatedBase.filter(signal =>
       !acceptedStatuses.has(signal.executionStatus ?? 'pending')
       && !isHiddenExecutionFailure(signal.executionNotes)
-      && scoreMatchesFilter(signal, scoreFilter)
       && rejectedKindMatches(signal)
       && rejectedQueryMatches(signal)
     );
@@ -6237,7 +6027,6 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
         ? wallet.totalValueUsdt
         : wallet.totalValueUsdt + wallet.futuresTotalUsdt;
     const startingBalance = currentCapital - (closedPnl / 100) * currentCapital;
-    const scoreBase = acceptedAnalyticsBeforeScore;
     const filterCounts = {
       statusAll: acceptedAnalyticsBase.filter(signal => sideMatches(signal)).length,
       open: acceptedAnalyticsBase.filter(signal => sideMatches(signal) && effectiveLiveStatus(signal) === 'OPEN').length,
@@ -6249,12 +6038,7 @@ app.get('/api/portfolio/live-ledger', requireAuth, async (req, res) => {
       short: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && signal.side === 'SHORT').length,
       marketAll: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal)).length,
       spot: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal) && signal.market === 'spot').length,
-      futures: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal) && signal.market === 'futures').length,
-      scoreAll: scoreBase.length,
-      scoreGreen: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'green').length,
-      scoreYellow: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'yellow').length,
-      scoreRed: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'red').length,
-      unscored: scoreBase.filter(signal => scoreToneFromReason(signal.reason) === 'unscored').length
+      futures: acceptedAnalyticsBase.filter(signal => statusMatches(signal) && sideMatches(signal) && signal.market === 'futures').length
     };
     const payload = {
       ok: true,
@@ -6597,14 +6381,12 @@ async function initializeRuntime() {
   await runStartupStep('spot ticker poll', pollTickersFallback);
   await runStartupStep('futures ticker poll', pollFuturesTickersFallback);
   ensureSymbolUniversesFromTickers();
-  await runStartupStep('inactive open signal cleanup', async () => closeInactiveMarketSignals());
   await runStartupStep('market scan', scanMarket);
   await runStartupStep('ledger execution sync', processLedgerExecutions);
   setInterval(pollTickersFallback, 5000);
   setInterval(pollFuturesTickersFallback, 5000);
   setInterval(monitorLiveFuturesProtection, 5000);
   setInterval(processLedgerExecutions, 5000);
-  setInterval(closeInactiveMarketSignals, 60_000);
   setInterval(scanMarket, 60_000);
   setInterval(syncTelegramSubscribersFromBot, 15000);
   setInterval(() => broadcast('dashboard', getDashboardPayload()), 5000);

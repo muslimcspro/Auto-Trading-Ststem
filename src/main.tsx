@@ -13,7 +13,6 @@ type SymbolInfo = { symbol: string; baseAsset: string; quoteAsset: string };
 type MarketMode = 'spot' | 'futures';
 type ExecutionVenueMode = MarketMode | 'both';
 type StrategyMarketScope = 'spot' | 'futures' | 'all';
-type ScoreFilter = 'all' | 'green' | 'yellow' | 'red' | 'unscored';
 type Strategy = { id: string; name: string; risk: Risk; marketScope?: StrategyMarketScope; description: string };
 type Signal = {
   id: number;
@@ -42,8 +41,6 @@ type Signal = {
   executionNotes?: string[];
   ledgerSimulationStatus?: 'accepted' | 'rejected';
   ledgerSimulationNotes?: string[];
-  ledgerQualityScore?: number | null;
-  ledgerQualityGatePassed?: boolean;
   ledgerPnlEligible?: boolean;
   ledgerStartingCapitalUsdt?: number;
   ledgerAvailableCapitalUsdt?: number;
@@ -292,11 +289,6 @@ type LivePortfolioLedgerResponse = {
     marketAll: number;
     spot: number;
     futures: number;
-    scoreAll: number;
-    scoreGreen: number;
-    scoreYellow: number;
-    scoreRed: number;
-    unscored: number;
   };
   accepted: {
     total: number;
@@ -562,20 +554,6 @@ const formatTargetRiskRatio = (signal: Pick<Signal, 'expectedProfitPct' | 'riskP
 
 const formatTradeLabel = (id: number) => `T-${Math.max(0, id).toString(36).toUpperCase().padStart(6, '0')}`;
 
-const extractSignalScore = (reason: string) => {
-  const value = reason.match(/\bScore\s+(-?\d+(?:\.\d+)?)/i)?.[1];
-  const score = Number(value);
-  return Number.isFinite(score) ? score : null;
-};
-
-const getSignalScore = (signal: Pick<Signal, 'reason'>) => extractSignalScore(signal.reason);
-
-const scoreTone = (score: number | null): Exclude<ScoreFilter, 'all'> =>
-  score == null ? 'unscored' : score >= 60 ? 'green' : score >= 40 ? 'yellow' : 'red';
-
-const scoreMatches = (signal: Pick<Signal, 'reason'>, filter: ScoreFilter) =>
-  filter === 'all' || scoreTone(getSignalScore(signal)) === filter;
-
 const ledgerRejectReason = (signal: Pick<Signal, 'ledgerSimulationNotes' | 'ledgerSimulationStatus'>) =>
   signal.ledgerSimulationStatus === 'rejected'
     ? signal.ledgerSimulationNotes?.[0] ?? 'Rejected by ledger simulation.'
@@ -596,7 +574,6 @@ const acceptedTradeLedgerColumns = [
   'Market',
   'TP / SL',
   'Allocation',
-  'Score',
   'Duration',
   'PnL'
 ] as const;
@@ -608,8 +585,7 @@ const rejectedTradeLedgerColumns = [
   'Reject Reason',
   'Side',
   'Venue',
-  'TF',
-  'Score'
+  'TF'
 ] as const;
 
 const portfolioLedgerColumns = [
@@ -629,7 +605,6 @@ const portfolioLedgerColumns = [
   'Market',
   'Liq.Price',
   'TP / SL',
-  'Score',
   'PnL'
 ] as const;
 
@@ -1974,7 +1949,6 @@ function AutoTradePage({
   const [portfolioTradesMarketFilter, setPortfolioTradesMarketFilter] = useState<'all' | 'spot' | 'futures'>('all');
   const [portfolioTradesTimeframeFilter, setPortfolioTradesTimeframeFilter] = useState<'all' | Timeframe>('all');
   const [portfolioTradesExecutionProfileFilter, setPortfolioTradesExecutionProfileFilter] = useState<'all' | ExitMode>('all');
-  const [portfolioTradesScoreFilter, setPortfolioTradesScoreFilter] = useState<ScoreFilter>('all');
   const [portfolioTradeQuery, setPortfolioTradeQuery] = useState('');
   const [portfolioRejectedTradeQuery, setPortfolioRejectedTradeQuery] = useState('');
   const [portfolioWalletVenueFilter, setPortfolioWalletVenueFilter] = useState<'all' | 'spot' | 'futures'>('all');
@@ -2028,7 +2002,7 @@ function AutoTradePage({
   }));
 
   const insightRows = useMemo(() => buildInsightRows(signals, strategies, tickers)
-    .sort((a, b) => b.score - a.score || b.winRate - a.winRate || b.closed - a.closed || b.total - a.total), [signals, strategies, tickers]);
+    .sort((a, b) => b.winRate - a.winRate || b.closed - a.closed || b.total - a.total), [signals, strategies, tickers]);
   const lead = insightRows[0] ?? null;
   const [sessionUser, setSessionUser] = useState<AuthSessionUser | null>(null);
   const [memberName, setMemberName] = useState('Premium Member');
@@ -2530,7 +2504,6 @@ function AutoTradePage({
       market: portfolioTradesMarketFilter,
       timeframe: portfolioTradesTimeframeFilter,
       mode: portfolioTradesExecutionProfileFilter,
-      score: portfolioTradesScoreFilter,
       acceptedKind: 'all',
       rejectedKind: portfolioRejectedKind,
       acceptedQuery: portfolioTradeQuery,
@@ -2589,7 +2562,7 @@ function AutoTradePage({
       if (ledgerRefreshTimeout) window.clearTimeout(ledgerRefreshTimeout);
       window.clearInterval(ledgerRefresh);
     };
-  }, [autoMode, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioRejectedKind, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesExecutionProfileFilter, portfolioTradesMarketFilter, portfolioTradesRange, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter, venueMode]);
+  }, [autoMode, portfolioTradeQuery, portfolioRejectedTradeQuery, portfolioRejectedKind, portfolioTradesCustomFrom, portfolioTradesCustomTo, portfolioTradesExecutionProfileFilter, portfolioTradesMarketFilter, portfolioTradesRange, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter, venueMode]);
 
   const confirmLiveExecutionMode = () => {
     setLiveExecutionMode('live');
@@ -2718,7 +2691,6 @@ function AutoTradePage({
   const perTradeCap = deployableCapital / maxTradesValue;
   const allInDrawdown = capitalValue * Math.min(0.18, (riskValue / 100) * 3.4 || 0);
   const splitFourDrawdown = Math.min(riskBudget * 2.1, deployableCapital * 0.12);
-  const baseScore = Math.max(0, lead?.score ?? 0);
   const confidence = Math.min(96, 45 + (lead?.winRate ?? 0) * 0.35 + Math.min(18, (lead?.closed ?? 0) * 0.22));
   const priorityStack = insightRows.slice(0, Math.max(1, Math.min(4, maxTradesValue)));
   const trackedTrades = priorityStack.reduce((sum, row) => sum + row.total, 0);
@@ -2865,7 +2837,7 @@ function AutoTradePage({
     const sideMatch = portfolioTradesSideFilter === 'all'
       || (portfolioTradesSideFilter === 'long' && row.side === 'LONG')
       || (portfolioTradesSideFilter === 'short' && row.side === 'SHORT');
-    return inRange && (venueMode === 'both' || row.market === venueMode) && statusMatch && sideMatch && scoreMatches(row, portfolioTradesScoreFilter);
+    return inRange && (venueMode === 'both' || row.market === venueMode) && statusMatch && sideMatch;
   });
   const normalizedPortfolioTradeQuery = portfolioTradeQuery.trim().toUpperCase();
   const normalizedPortfolioRejectedTradeQuery = portfolioRejectedTradeQuery.trim().toUpperCase();
@@ -2893,8 +2865,7 @@ function AutoTradePage({
         pnl: row.pnl,
         pnlUsdt: row.pnlUsdt,
         roiPct: row.roiPct,
-        pnlLabel: `${row.pnl >= 0 ? '+' : ''}${row.pnl.toFixed(2)}%`,
-        score: extractSignalScore(row.reason)
+        pnlLabel: `${row.pnl >= 0 ? '+' : ''}${row.pnl.toFixed(2)}%`
       }));
     }
     return signals
@@ -2911,7 +2882,7 @@ function AutoTradePage({
         const sideMatch = portfolioTradesSideFilter === 'all'
           || (portfolioTradesSideFilter === 'long' && signal.side === 'LONG')
           || (portfolioTradesSideFilter === 'short' && signal.side === 'SHORT');
-        return inRange && accepted && marketMatch && statusMatch && sideMatch && scoreMatches(signal, portfolioTradesScoreFilter);
+        return inRange && accepted && marketMatch && statusMatch && sideMatch;
       })
       .map(signal => {
         const marketPrice = signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price;
@@ -2934,12 +2905,11 @@ function AutoTradePage({
           expectedProfitPct: signal.expectedProfitPct,
           riskPct: signal.riskPct,
           pnl,
-          pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`,
-          score: extractSignalScore(signal.reason)
+          pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
         };
       })
       .sort((a, b) => b.openedAt - a.openedAt);
-  }, [autoMode, filteredPortfolioTradeRows, futuresTickers, leverageValue, portfolioTradesRangeEnd, portfolioTradesRangeStart, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, signals, tickers, venueMode]);
+  }, [autoMode, filteredPortfolioTradeRows, futuresTickers, leverageValue, portfolioTradesRangeEnd, portfolioTradesRangeStart, portfolioTradesSideFilter, portfolioTradesStatusFilter, signals, tickers, venueMode]);
   const privateRejectedRows = useMemo<PortfolioRejectedViewRow[]>(() => {
     if (autoMode === 'live') return [];
     if (autoMode === 'shadow') {
@@ -2957,7 +2927,7 @@ function AutoTradePage({
             const queryMatches = !normalizedPortfolioRejectedTradeQuery
               || tradeLabel.includes(normalizedPortfolioRejectedTradeQuery)
               || String(row.id).includes(normalizedPortfolioRejectedTradeQuery.replace(/^T-?/, ''));
-          return inRange && marketMatch && sideMatch && timeframeMatch && modeMatch && !isHiddenExecutionFailure(row.failedRules) && scoreMatches(row, portfolioTradesScoreFilter) && queryMatches;
+          return inRange && marketMatch && sideMatch && timeframeMatch && modeMatch && !isHiddenExecutionFailure(row.failedRules) && queryMatches;
         })
         .map(row => ({
           id: row.id,
@@ -2993,7 +2963,7 @@ function AutoTradePage({
         const queryMatches = !normalizedPortfolioRejectedTradeQuery
           || tradeLabel.includes(normalizedPortfolioRejectedTradeQuery)
           || String(signal.id).includes(normalizedPortfolioRejectedTradeQuery.replace(/^T-?/, ''));
-        return inRange && rejected && marketMatch && sideMatch && timeframeMatch && modeMatch && !isHiddenExecutionFailure(signal.executionNotes) && scoreMatches(signal, portfolioTradesScoreFilter) && queryMatches;
+        return inRange && rejected && marketMatch && sideMatch && timeframeMatch && modeMatch && !isHiddenExecutionFailure(signal.executionNotes) && queryMatches;
       })
       .map(signal => ({
         id: signal.id,
@@ -3014,7 +2984,7 @@ function AutoTradePage({
         failedRules: signal.executionNotes?.length ? signal.executionNotes : [signal.executionStatus ?? 'Rejected']
       }))
       .sort((a, b) => b.openedAt - a.openedAt);
-  }, [activeRejectedTradeRows, autoMode, futuresTickers, leverageValue, normalizedPortfolioRejectedTradeQuery, portfolioTradesExecutionProfileFilter, portfolioTradesRangeEnd, portfolioTradesRangeStart, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesTimeframeFilter, signals, tickers, venueMode]);
+  }, [activeRejectedTradeRows, autoMode, futuresTickers, leverageValue, normalizedPortfolioRejectedTradeQuery, portfolioTradesExecutionProfileFilter, portfolioTradesRangeEnd, portfolioTradesRangeStart, portfolioTradesSideFilter, portfolioTradesTimeframeFilter, signals, tickers, venueMode]);
   const portfolioLedgerBaseSignals = useMemo(() => {
     if (autoMode === 'live') return [];
     if (autoMode === 'shadow') {
@@ -3042,9 +3012,8 @@ function AutoTradePage({
       && sideMatches(signal, portfolioTradesSideFilter)
       && (portfolioTradesTimeframeFilter === 'all' || signal.timeframe === portfolioTradesTimeframeFilter)
       && (portfolioTradesExecutionProfileFilter === 'all' || signal.exitMode === portfolioTradesExecutionProfileFilter)
-      && scoreMatches(signal, portfolioTradesScoreFilter)
       && queryMatches;
-  }), [normalizedPortfolioTradeQuery, portfolioLedgerBaseSignals, portfolioTradesExecutionProfileFilter, portfolioTradesScoreFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter]);
+  }), [normalizedPortfolioTradeQuery, portfolioLedgerBaseSignals, portfolioTradesExecutionProfileFilter, portfolioTradesSideFilter, portfolioTradesStatusFilter, portfolioTradesTimeframeFilter]);
   const portfolioLedgerRows = useMemo<SignalTradeRow[]>(() => portfolioLedgerSignals.map(signal => {
     const marketPrice = signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price;
     const pnl = getSignalPnl(signal, marketPrice);
@@ -3060,7 +3029,6 @@ function AutoTradePage({
       label: formatTradeLabel(signal.id),
       pnl,
       pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`,
-      score: extractSignalScore(signal.reason),
       allocationAmount: allocatedCapital,
       allocationPct
     };
@@ -3759,15 +3727,13 @@ function AutoTradePage({
   const publicStrategies = useMemo(() => strategies.filter(strategy => !labStrategySet.has(strategy.id)), [labStrategySet, strategies]);
   const labStrategies = useMemo(() => strategies.filter(strategy => labStrategySet.has(strategy.id)), [labStrategySet, strategies]);
   const adminStrategyMetrics = useMemo(() => {
-    const metrics = new Map<string, { total: number; closed: number; wins: number; winRate: number; score: number }>();
+    const metrics = new Map<string, { total: number; closed: number; wins: number; winRate: number }>();
     for (const strategy of strategies) {
       const own = signals.filter(signal => signal.strategyId === strategy.id);
       const closed = own.filter(signal => signal.status !== 'OPEN');
       const wins = own.filter(signal => signal.status === 'WIN').length;
-      const losses = own.filter(signal => signal.status === 'LOSS').length;
       const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
-      const score = closed.length ? Math.max(0, Math.min(100, (winRate * 0.7) + (wins * 3) - (losses * 4))) : 0;
-      metrics.set(strategy.id, { total: own.length, closed: closed.length, wins, winRate, score });
+      metrics.set(strategy.id, { total: own.length, closed: closed.length, wins, winRate });
     }
     return metrics;
   }, [signals, strategies]);
@@ -4659,13 +4625,11 @@ function AutoTradePage({
               marketFilter={portfolioTradesMarketFilter}
               timeframeFilter={portfolioTradesTimeframeFilter}
               executionProfileFilter={portfolioTradesExecutionProfileFilter}
-              scoreFilter={portfolioTradesScoreFilter}
               setStatusFilter={setPortfolioTradesStatusFilter}
               setSideFilter={setPortfolioTradesSideFilter}
               setMarketFilter={setPortfolioTradesMarketFilter}
               setTimeframeFilter={setPortfolioTradesTimeframeFilter}
               setExecutionProfileFilter={setPortfolioTradesExecutionProfileFilter}
-              setScoreFilter={setPortfolioTradesScoreFilter}
               counts={effectivePortfolioFilterCounts}
             />
             <div className="trade-extremes-row trade-extremes-row-bottom portfolio-ledger-meta-row">
@@ -4763,7 +4727,6 @@ function AutoTradePage({
                       <td>{row.marketPrice != null ? fmt(row.marketPrice) : '-'}</td>
                       <td>{row.liquidationPrice != null ? fmt(row.liquidationPrice) : '-'}</td>
                       <td>{formatTargetRiskRatio(row)}</td>
-                      <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
                       <td className="ledger-pnl-cell">
                         {row.pnlUsdt != null || row.roiPct != null
                           ? <span className="portfolio-pnl-stack">
@@ -4904,7 +4867,6 @@ function AutoTradePage({
                   <strong>{strategy.name}</strong>
                   <small>{strategyMarketLabel(strategy)}</small>
                   <small>{metrics?.winRate ?? 0}% WR</small>
-                  <small>{(metrics?.score ?? 0).toFixed(1)} score</small>
                   <div className="scoreline"><i style={{ width: `${metrics?.winRate ?? 0}%` }} /></div>
                   <b>{isActive ? 'ON' : 'OFF'}</b>
                 </button>;
@@ -4919,7 +4881,6 @@ function AutoTradePage({
                     <strong>{strategy.name}</strong>
                     <small>{strategyMarketLabel(strategy)}</small>
                     <small>{adminStrategyMetrics.get(strategy.id)?.winRate ?? 0}% WR</small>
-                    <small>{(adminStrategyMetrics.get(strategy.id)?.score ?? 0).toFixed(1)} score</small>
                     <div className="scoreline"><i style={{ width: `${adminStrategyMetrics.get(strategy.id)?.winRate ?? 0}%` }} /></div>
                     <b>{isActive ? 'ON' : 'OFF'}</b>
                   </button>
@@ -5408,13 +5369,11 @@ function SignalFilterBar({
   marketFilter,
   timeframeFilter,
   executionProfileFilter,
-  scoreFilter,
   setStatusFilter,
   setSideFilter,
   setMarketFilter,
   setTimeframeFilter,
   setExecutionProfileFilter,
-  setScoreFilter,
   counts
 }: {
   statusFilter: 'all' | 'open' | 'closed' | 'win' | 'loss';
@@ -5422,13 +5381,11 @@ function SignalFilterBar({
   marketFilter?: 'all' | 'spot' | 'futures';
   timeframeFilter?: 'all' | Timeframe;
   executionProfileFilter?: 'all' | ExitMode;
-  scoreFilter?: ScoreFilter;
   setStatusFilter: (filter: 'all' | 'open' | 'closed' | 'win' | 'loss') => void;
   setSideFilter: (filter: 'all' | 'long' | 'short') => void;
   setMarketFilter?: (filter: 'all' | 'spot' | 'futures') => void;
   setTimeframeFilter?: (filter: 'all' | Timeframe) => void;
   setExecutionProfileFilter?: (filter: 'all' | ExitMode) => void;
-  setScoreFilter?: (filter: ScoreFilter) => void;
   counts: ReturnType<typeof getSignalFilterCounts>;
 }) {
   return <div className="signal-filters">
@@ -5470,21 +5427,10 @@ function SignalFilterBar({
           {option === 'all' ? 'All Modes' : formatExitModeLabel(option)}
         </button>)}
       </div>}
-      {scoreFilter && setScoreFilter && <div>
-        <span>Score</span>
-        {([
-          ['all', `All Scores ${counts.scoreAll}`],
-          ['green', `Green ${counts.scoreGreen}`],
-          ['yellow', `Yellow ${counts.scoreYellow}`],
-          ['red', `Red ${counts.scoreRed}`],
-          ['unscored', `No Score ${counts.unscored}`]
-        ] as const).map(([value, label]) => <button key={value} className={`${scoreFilter === value ? 'active' : ''} score-filter-${value}`} onClick={() => setScoreFilter(value)}>{label}</button>)}
-      </div>}
     </div>;
   }
 
 function getSignalFilterCounts(signals: Signal[], statusFilter: 'all' | 'open' | 'closed' | 'win' | 'loss', sideFilter: 'all' | 'long' | 'short') {
-  const scoreBase = signals.filter(signal => statusMatches(signal, statusFilter) && sideMatches(signal, sideFilter));
   return {
     statusAll: signals.filter(signal => sideMatches(signal, sideFilter)).length,
     open: signals.filter(signal => sideMatches(signal, sideFilter) && signal.status === 'OPEN').length,
@@ -5496,12 +5442,7 @@ function getSignalFilterCounts(signals: Signal[], statusFilter: 'all' | 'open' |
     short: signals.filter(signal => statusMatches(signal, statusFilter) && signal.side === 'SHORT').length,
     marketAll: signals.filter(signal => statusMatches(signal, statusFilter) && sideMatches(signal, sideFilter)).length,
     spot: signals.filter(signal => statusMatches(signal, statusFilter) && sideMatches(signal, sideFilter) && signal.market === 'spot').length,
-    futures: signals.filter(signal => statusMatches(signal, statusFilter) && sideMatches(signal, sideFilter) && signal.market === 'futures').length,
-    scoreAll: scoreBase.length,
-    scoreGreen: scoreBase.filter(signal => scoreTone(getSignalScore(signal)) === 'green').length,
-    scoreYellow: scoreBase.filter(signal => scoreTone(getSignalScore(signal)) === 'yellow').length,
-    scoreRed: scoreBase.filter(signal => scoreTone(getSignalScore(signal)) === 'red').length,
-    unscored: scoreBase.filter(signal => scoreTone(getSignalScore(signal)) === 'unscored').length
+    futures: signals.filter(signal => statusMatches(signal, statusFilter) && sideMatches(signal, sideFilter) && signal.market === 'futures').length
   };
 }
 
@@ -5593,7 +5534,6 @@ type InsightRow = {
   shortCount: number;
   longNetPnl: number;
   shortNetPnl: number;
-  score: number;
 };
 
 type TimeframeInsight = {
@@ -5663,7 +5603,6 @@ type PortfolioAcceptedRow = {
   pnlSource?: string | null;
   pnlReadAt?: number | null;
   pnlLabel: string;
-  score: number | null;
   allocationAmount?: number;
   allocationPct?: number;
 };
@@ -5702,8 +5641,6 @@ function buildInsightRows(signals: Signal[], strategies: { id: string; name: str
     const longNetPnl = longSignals.reduce((sum, signal) => sum + getSignalPnl(signal, tickers.get(signal.symbol)?.price), 0);
     const shortNetPnl = shortSignals.reduce((sum, signal) => sum + getSignalPnl(signal, tickers.get(signal.symbol)?.price), 0);
     const winRate = closedSignals.length ? (wins / closedSignals.length) * 100 : 0;
-    const stabilityPenalty = losses * 1.35 + open * 0.35;
-    const score = netPnl + winRate - stabilityPenalty;
     return {
       strategyId: strategy.id,
       name: strategy.name,
@@ -5719,8 +5656,7 @@ function buildInsightRows(signals: Signal[], strategies: { id: string; name: str
       longCount: longSignals.length,
       shortCount: shortSignals.length,
       longNetPnl,
-      shortNetPnl,
-      score
+      shortNetPnl
     };
   });
 }
@@ -5838,13 +5774,13 @@ function simulatePortfolioReplay(
     .sort((a, b) => a.openedAt - b.openedAt || a.id - b.id);
   const rankedStrategyIds = Array.from(sortedSignals.reduce((map, signal) => {
     const marketPrice = marketPriceFor(signal);
-    const current = map.get(signal.strategyId) ?? { score: 0, count: 0 };
-    current.score += getSignalPnl(signal, marketPrice);
+    const current = map.get(signal.strategyId) ?? { pnl: 0, count: 0 };
+    current.pnl += getSignalPnl(signal, marketPrice);
     current.count += 1;
     map.set(signal.strategyId, current);
     return map;
-  }, new Map<string, { score: number; count: number }>()).entries())
-    .sort((a, b) => b[1].score - a[1].score || b[1].count - a[1].count || a[0].localeCompare(b[0]))
+  }, new Map<string, { pnl: number; count: number }>()).entries())
+    .sort((a, b) => b[1].pnl - a[1].pnl || b[1].count - a[1].count || a[0].localeCompare(b[0]))
     .map(([strategyId]) => strategyId);
   const allowedStrategyIds = rules.executionSource === 'best-single'
     ? new Set(rankedStrategyIds.slice(0, 1))
@@ -5996,7 +5932,7 @@ function buildTimeframeInsights(signals: Signal[], strategies: { id: string; nam
     const rows = buildInsightRows(signals.filter(signal => signal.timeframe === timeframe), strategies, tickers);
     return {
       timeframe,
-      top: rows.sort((a, b) => b.score - a.score)[0] ?? null
+      top: rows.sort((a, b) => b.winRate - a.winRate || b.closed - a.closed || b.total - a.total)[0] ?? null
     };
   });
 }
@@ -6039,7 +5975,6 @@ function PerformanceChart({
   const [ledgerMarketFilter, setLedgerMarketFilter] = useState<'all' | 'spot' | 'futures'>('all');
   const [ledgerTimeframeFilter, setLedgerTimeframeFilter] = useState<'all' | Timeframe>('all');
   const [ledgerExecutionProfileFilter, setLedgerExecutionProfileFilter] = useState<'all' | ExitMode>('all');
-  const [ledgerScoreFilter, setLedgerScoreFilter] = useState<ScoreFilter>('all');
   const [ledgerTradeQuery, setLedgerTradeQuery] = useState('');
   const [ledgerSimulationSettings, setLedgerSimulationSettings] = useState<LedgerSimulationSettings | null>(null);
   const [ledgerSimulationDraft, setLedgerSimulationDraft] = useState<LedgerSimulationSettings | null>(null);
@@ -6120,7 +6055,7 @@ function PerformanceChart({
     ? commandSignals
     : commandSignals.filter(signal => signal.strategyId === selectedStrategyId);
   const insightRows = useMemo(() => buildInsightRows(commandSignals, strategyCatalog, tickers)
-    .sort((a, b) => b.score - a.score || b.winRate - a.winRate || b.closed - a.closed || b.open - a.open || a.name.localeCompare(b.name)), [commandSignals, strategyCatalog, tickers]);
+    .sort((a, b) => b.winRate - a.winRate || b.closed - a.closed || b.open - a.open || a.name.localeCompare(b.name)), [commandSignals, strategyCatalog, tickers]);
   const timeframeInsights = useMemo(() => buildTimeframeInsights(rangedSignals, strategyCatalog, tickers), [rangedSignals, strategyCatalog, tickers]);
   const scopedInsights = selectedStrategyId === 'all' ? insightRows : insightRows.filter(row => row.strategyId === selectedStrategyId);
   const rangedPortfolioTotals = insightRows.reduce((acc, item) => ({
@@ -6148,7 +6083,6 @@ function PerformanceChart({
       marketPrice,
       label: formatTradeLabel(signal.id),
       pnl,
-      score: extractSignalScore(signal.reason),
       pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
     };
   }), [ledgerBaseSignals, tickers, futuresTickers]);
@@ -6162,9 +6096,8 @@ function PerformanceChart({
       && sideMatches(signal, ledgerSideFilter)
       && (ledgerTimeframeFilter === 'all' || signal.timeframe === ledgerTimeframeFilter)
       && (ledgerExecutionProfileFilter === 'all' || signal.exitMode === ledgerExecutionProfileFilter)
-      && scoreMatches(signal, ledgerScoreFilter)
       && tradeQueryMatches;
-  }), [ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter, ledgerTimeframeFilter, ledgerExecutionProfileFilter, ledgerScoreFilter, normalizedLedgerTradeQuery]);
+  }), [ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter, ledgerTimeframeFilter, ledgerExecutionProfileFilter, normalizedLedgerTradeQuery]);
   const tradeRows = useMemo(() => ledgerSignals.map(signal => {
     const marketPrice = signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price;
     const pnl = getSignalPnl(signal, marketPrice);
@@ -6173,7 +6106,6 @@ function PerformanceChart({
       marketPrice,
       label: formatTradeLabel(signal.id),
       pnl,
-      score: extractSignalScore(signal.reason),
       pnlLabel: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`
     };
   }), [ledgerSignals, tickers, futuresTickers]);
@@ -6387,7 +6319,6 @@ function PerformanceChart({
         <div className="scorecard-topline"><RiskBadge risk={item.risk} /><span className={selected?.has(item.strategyId) ? 'strategy-switch on' : 'strategy-switch off'}>{selected?.has(item.strategyId) ? 'ON' : 'OFF'}</span></div>
         <strong>{item.name}</strong>
         <small className="scorecard-caption">{`${item.winRate.toFixed(0)}% WR`}</small>
-        <small className="scorecard-score">{`${item.score.toFixed(1)} score`}</small>
         <div className="scoreline"><i style={{ width: `${item.winRate || Math.min(100, item.total * 8)}%` }} /></div>
       </button>)}
     </div>}
@@ -6543,13 +6474,11 @@ function PerformanceChart({
           marketFilter={ledgerMarketFilter}
           timeframeFilter={ledgerTimeframeFilter}
           executionProfileFilter={ledgerExecutionProfileFilter}
-          scoreFilter={ledgerScoreFilter}
           setStatusFilter={setLedgerStatusFilter}
           setSideFilter={setLedgerSideFilter}
           setMarketFilter={setLedgerMarketFilter}
           setTimeframeFilter={setLedgerTimeframeFilter}
           setExecutionProfileFilter={setLedgerExecutionProfileFilter}
-          setScoreFilter={setLedgerScoreFilter}
           counts={filterCounts}
         />
         {tradeRows.length === 0 && <p className="empty">No trades generated for this selection yet.</p>}
@@ -6592,8 +6521,8 @@ function PerformanceChart({
               </tr>
             </thead>
             <tbody>
-              {acceptedTradeRows.length === 0 && <tr><td colSpan={14} className="empty">No SIM OK trades matched this selection.</td></tr>}
-              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={14} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
+              {acceptedTradeRows.length === 0 && <tr><td colSpan={13} className="empty">No SIM OK trades matched this selection.</td></tr>}
+              {ledgerTopSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={13} style={{ height: `${ledgerTopSpacerHeight}px` }} /></tr>}
               {visibleAcceptedTradeRows.map(row => <tr key={row.id} id={`trade-row-${row.id}`} className={`${focusedTradeId === row.id ? 'focused' : ''} chartable-row`} onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
                 <td>{formatTradeLabel(row.id)}</td>
                 <td><strong>{row.symbol}</strong></td>
@@ -6610,7 +6539,6 @@ function PerformanceChart({
                 <td>{row.marketPrice ? fmt(row.marketPrice) : '-'}</td>
                 <td>{formatTargetRiskRatio(row)}</td>
                 <td className="ledger-allocation-cell">{`${(row.ledgerAllocationUsdt ?? 0).toFixed(2)} USDT`}</td>
-                <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
                 <td>{formatDuration(row.openedAt, row.status === 'OPEN' ? undefined : row.closedAt)}</td>
                 <td className="ledger-pnl-cell">
                   <span className="portfolio-pnl-stack sim-pnl-stack">
@@ -6619,7 +6547,7 @@ function PerformanceChart({
                   </span>
                 </td>
               </tr>)}
-              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={14} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
+              {ledgerBottomSpacerHeight > 0 && <tr aria-hidden="true" className="ledger-spacer-row"><td colSpan={13} style={{ height: `${ledgerBottomSpacerHeight}px` }} /></tr>}
             </tbody>
           </table>
         </div>
@@ -6644,7 +6572,6 @@ function PerformanceChart({
                 <td><SideBadge side={row.side} /></td>
                 <td><span className="ledger-venue-cell"><strong>{row.market === 'futures' ? 'Futures x1' : 'Spot'}</strong></span></td>
                 <td>{row.timeframe}</td>
-                <td className="ledger-score-cell"><b className={`ledger-score ${scoreTone(row.score)}`}>{row.score == null ? '-' : row.score.toFixed(1)}</b></td>
               </tr>)}
             </tbody>
           </table>
@@ -6743,9 +6670,8 @@ function PerformanceCharts({
   const chartRows = [...groupedRows.values()].map(row => ({
     ...row,
     closedTrades: row.wins + row.losses,
-    winRate: row.wins + row.losses ? Math.round((row.wins / (row.wins + row.losses)) * 100) : 0,
-    score: (insights.find(item => item.strategyId === row.strategyId)?.score) ?? 0
-  })).sort((a, b) => b.score - a.score || b.winRate - a.winRate || b.closedTrades - a.closedTrades || b.total - a.total);
+    winRate: row.wins + row.losses ? Math.round((row.wins / (row.wins + row.losses)) * 100) : 0
+  })).sort((a, b) => b.winRate - a.winRate || b.closedTrades - a.closedTrades || b.total - a.total);
   const chartTotals = chartRows.reduce((acc, row) => ({
     total: acc.total + row.total,
     wins: acc.wins + row.wins,
@@ -6754,7 +6680,6 @@ function PerformanceCharts({
   }), { total: 0, wins: 0, losses: 0, open: 0 });
   const bestReturn = [...insights].sort((a, b) => b.netPnl - a.netPnl)[0] ?? null;
   const bestWinRate = [...insights].filter(item => item.closed > 0).sort((a, b) => b.winRate - a.winRate)[0] ?? null;
-  const mostStable = [...insights].filter(item => item.closed > 0).sort((a, b) => b.score - a.score)[0] ?? null;
   const bestLong = [...insights].filter(item => item.longCount > 0).sort((a, b) => b.longNetPnl - a.longNetPnl)[0] ?? null;
   const bestShort = [...insights].filter(item => item.shortCount > 0).sort((a, b) => b.shortNetPnl - a.shortNetPnl)[0] ?? null;
   const strongestAvg = [...insights].filter(item => item.total > 0).sort((a, b) => b.avgPnl - a.avgPnl)[0] ?? null;
@@ -6773,8 +6698,7 @@ function PerformanceCharts({
       title: 'Performance Leaders',
       items: [
         { label: 'Highest Profit', name: bestReturn?.name ?? 'No strategy yet', value: bestReturn ? `${bestReturn.netPnl >= 0 ? '+' : ''}${bestReturn.netPnl.toFixed(2)}%` : 'N/A', tone: bestReturn && bestReturn.netPnl < 0 ? 'bad' : 'good', meta: bestReturn ? `${bestReturn.total} trades` : 'No data' },
-        { label: 'Highest Accuracy', name: bestWinRate?.name ?? 'No strategy yet', value: bestWinRate ? `${bestWinRate.winRate.toFixed(0)}%` : 'N/A', tone: bestWinRate && bestWinRate.winRate < 50 ? 'bad' : 'good', meta: bestWinRate ? `${bestWinRate.closed} closed` : 'No data' },
-        { label: 'Most Stable', name: mostStable?.name ?? 'No strategy yet', value: mostStable ? `${mostStable.score.toFixed(1)} score` : 'N/A', tone: 'good' as const, meta: mostStable ? `${mostStable.losses} losses` : 'No data' }
+        { label: 'Highest Accuracy', name: bestWinRate?.name ?? 'No strategy yet', value: bestWinRate ? `${bestWinRate.winRate.toFixed(0)}%` : 'N/A', tone: bestWinRate && bestWinRate.winRate < 50 ? 'bad' : 'good', meta: bestWinRate ? `${bestWinRate.closed} closed` : 'No data' }
       ]
     },
     {
@@ -6857,7 +6781,7 @@ function PerformanceCharts({
           </div>}
         </div>
         <div className="performance-chart-summary">
-          <span>Ranked By <b>Score</b></span>
+          <span>Ranked By <b>Win Rate</b></span>
           <span>Total Trades <b>{chartTotals.total}</b></span>
           <span>Wins <b className="good">{chartTotals.wins}</b></span>
           <span>Losses <b className="bad">{chartTotals.losses}</b></span>
@@ -6868,7 +6792,7 @@ function PerformanceCharts({
   </section>;
 }
 
-function StrategyChartTooltip({ active, payload }: { active?: boolean; payload?: { payload: Stat & { winLong: number; winShort: number; lossLong: number; lossShort: number; openLong: number; openShort: number; closedTrades: number; score: number } }[] }) {
+function StrategyChartTooltip({ active, payload }: { active?: boolean; payload?: { payload: Stat & { winLong: number; winShort: number; lossLong: number; lossShort: number; openLong: number; openShort: number; closedTrades: number } }[] }) {
   if (!active || !payload?.[0]) return null;
   const row = payload[0].payload;
   return <div className="trade-tooltip strategy-chart-tooltip">
@@ -6876,7 +6800,6 @@ function StrategyChartTooltip({ active, payload }: { active?: boolean; payload?:
     <span className="tooltip-heading"><RiskBadge risk={row.risk} compact /> <b className="tooltip-total-count">{row.total}</b> total trades | {row.winRate}% win rate</span>
     <div className="tooltip-metrics">
       <small>Closed Trades <b>{row.closedTrades}</b></small>
-      <small>Score <b>{row.score.toFixed(1)}</b></small>
     </div>
     <div className="tooltip-table">
       <div className="tooltip-table-head"><span>Status</span><span className="total-col">Total</span><span>Long</span><span>Short</span></div>
@@ -6891,7 +6814,6 @@ type SignalTradeRow = Signal & {
   label: string;
   pnl: number;
   pnlLabel: string;
-  score: number | null;
   marketPrice?: number;
   liquidationPrice?: number | null;
   pnlUsdt?: number | null;
