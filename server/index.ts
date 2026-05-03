@@ -6109,7 +6109,7 @@ app.post('/api/strategies/select', requireAdmin, (req, res) => {
 app.get('/api/live-rules', requireAuth, (_req, res) => {
   res.json({ ok: true, rules: liveExecutionRules });
 });
-app.get('/api/ledger-simulation', requireAuth, (_req, res) => {
+app.get('/api/ledger-simulation', (_req, res) => {
   const snapshot = ledgerCapitalSnapshot();
   res.json({
     ok: true,

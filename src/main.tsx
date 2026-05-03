@@ -122,6 +122,60 @@ type LedgerSimulationSnapshot = {
   futures?: LedgerVenueSimulationSnapshot;
 };
 type LedgerVenueSimulationSnapshot = Omit<LedgerSimulationSnapshot, 'spot' | 'futures'>;
+const defaultLedgerSimulationSettings: LedgerSimulationSettings = {
+  enabled: true,
+  startingCapitalUsdt: 100,
+  spotCapitalUsdt: 50,
+  futuresCapitalUsdt: 50,
+  reserveRatio: 10,
+  spotReserveRatio: 10,
+  futuresReserveRatio: 10,
+  maxOpenTrades: 10,
+  spotMaxOpenTrades: 5,
+  futuresMaxOpenTrades: 5,
+  minNotionalUsdt: 5,
+  spotMinNotionalUsdt: 5,
+  futuresMinNotionalUsdt: 5,
+  allocationMethod: 'equal',
+  riskPerTradePct: 2,
+  spotFeePct: 0.2,
+  futuresFeePct: 0.1,
+  slippagePct: 0.04,
+  futuresLeverage: 1,
+  marketScope: 'both',
+  allowedDirection: 'both',
+  maxSameDirectionOpen: 8,
+  maxSameMarketDirectionOpen: 6,
+  maxSameBaseAssetOpen: 1
+};
+const defaultLedgerSimulationSnapshot = (settings = defaultLedgerSimulationSettings): LedgerSimulationSnapshot => {
+  const spotDeployable = settings.spotCapitalUsdt * (1 - settings.spotReserveRatio / 100);
+  const futuresDeployable = settings.futuresCapitalUsdt * (1 - settings.futuresReserveRatio / 100);
+  return {
+    startingCapital: settings.startingCapitalUsdt,
+    currentCapital: settings.startingCapitalUsdt,
+    deployableCapital: spotDeployable + futuresDeployable,
+    committedCapital: 0,
+    availableCapital: spotDeployable + futuresDeployable,
+    openAccepted: 0,
+    spot: {
+      startingCapital: settings.spotCapitalUsdt,
+      currentCapital: settings.spotCapitalUsdt,
+      deployableCapital: spotDeployable,
+      committedCapital: 0,
+      availableCapital: spotDeployable,
+      openAccepted: 0
+    },
+    futures: {
+      startingCapital: settings.futuresCapitalUsdt,
+      currentCapital: settings.futuresCapitalUsdt,
+      deployableCapital: futuresDeployable,
+      committedCapital: 0,
+      availableCapital: futuresDeployable,
+      openAccepted: 0
+    }
+  };
+};
 type TradeChartTrade = {
   id: number;
   symbol: string;
@@ -6017,16 +6071,24 @@ function PerformanceChart({
     : Date.now();
   useEffect(() => {
     let cancelled = false;
+    const showDefaultLedgerSimulation = () => {
+      setLedgerSimulationSettings(current => current ?? defaultLedgerSimulationSettings);
+      setLedgerSimulationDraft(current => current ?? defaultLedgerSimulationSettings);
+      setLedgerSimulationSnapshot(current => current ?? defaultLedgerSimulationSnapshot());
+    };
     const loadLedgerSimulation = () => {
       api<{ settings: LedgerSimulationSettings; snapshot: LedgerSimulationSnapshot }>('/api/ledger-simulation')
         .then(response => {
           if (cancelled) return;
           setLedgerSimulationSettings(response.settings);
-          setLedgerSimulationDraft(current => current ?? response.settings);
+          setLedgerSimulationDraft(current => current === defaultLedgerSimulationSettings ? response.settings : current ?? response.settings);
           setLedgerSimulationSnapshot(response.snapshot);
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (!cancelled) showDefaultLedgerSimulation();
+        });
     };
+    showDefaultLedgerSimulation();
     loadLedgerSimulation();
     const timer = window.setInterval(loadLedgerSimulation, 15000);
     return () => {
