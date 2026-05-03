@@ -89,6 +89,7 @@ type TradeSignal = SignalDraft & {
   ledgerSimulationStatus?: 'accepted' | 'rejected';
   ledgerSimulationNotes?: string[];
   ledgerPnlEligible?: boolean;
+  ledgerStrategyLedgerEligible?: boolean;
   ledgerStartingCapitalUsdt?: number;
   ledgerAvailableCapitalUsdt?: number;
   ledgerAllocationUsdt?: number;
@@ -1779,8 +1780,16 @@ function getSymbolRules(symbol: string, market: TradingVenue) {
   return source.find(item => item.symbol === symbol) ?? null;
 }
 
+function symbolRulesLoaded(market: TradingVenue) {
+  return (market === 'futures' ? futuresSymbols : symbols).length > 0;
+}
+
 function countsInLedgerSimulation(signal: TradeSignal) {
   return signal.ledgerSimulationStatus !== 'rejected' && signal.ledgerPnlEligible !== false;
+}
+
+function countsInStrategyLedger(signal: TradeSignal) {
+  return signal.ledgerStrategyLedgerEligible !== false;
 }
 
 function ledgerFeeRatePct(market: TradingVenue) {
@@ -1803,6 +1812,19 @@ function ledgerVenueMinNotional(market: TradingVenue) {
   return market === 'futures' ? ledgerSimulationSettings.futuresMinNotionalUsdt : ledgerSimulationSettings.spotMinNotionalUsdt;
 }
 
+function signalActiveAt(signal: TradeSignal, atTime = Date.now()) {
+  if (signal.openedAt > atTime) return false;
+  if (signal.status === 'OPEN') return true;
+  const closeTime = signal.closedAt ?? signal.plannedExitAt ?? signal.openedAt;
+  return closeTime > atTime;
+}
+
+function signalRealizedAt(signal: TradeSignal, atTime = Date.now()) {
+  if (signal.status === 'OPEN') return false;
+  const closeTime = signal.closedAt ?? signal.plannedExitAt ?? signal.openedAt;
+  return closeTime <= atTime;
+}
+
 function ledgerSignalPnlUsdt(signal: TradeSignal, marketPrice?: number) {
   if (!countsInLedgerSimulation(signal)) return 0;
   const price = signal.status === 'OPEN'
@@ -1821,15 +1843,15 @@ function ledgerSignalPnlPct(signal: TradeSignal, marketPrice?: number) {
   return (ledgerSignalPnlUsdt(signal, marketPrice) / capital) * 100;
 }
 
-function ledgerVenueCapitalSnapshot(market: TradingVenue, excludeSignalId?: number) {
+function ledgerVenueCapitalSnapshot(market: TradingVenue, excludeSignalId?: number, sourceSignals = signals, atTime = Date.now()) {
   const startingCapital = ledgerVenueCapital(market);
-  const accepted = signals.filter(signal => signal.id !== excludeSignalId && signal.market === market && countsInLedgerSimulation(signal));
+  const accepted = sourceSignals.filter(signal => signal.id !== excludeSignalId && signal.market === market && countsInLedgerSimulation(signal));
   const realizedPnl = accepted
-    .filter(signal => signal.status !== 'OPEN')
+    .filter(signal => signalRealizedAt(signal, atTime))
     .reduce((sum, signal) => sum + ledgerSignalPnlUsdt(signal), 0);
   const currentCapital = Math.max(0, startingCapital + realizedPnl);
   const deployableCapital = currentCapital * (1 - ledgerVenueReserveRatio(market) / 100);
-  const open = accepted.filter(signal => signal.status === 'OPEN');
+  const open = accepted.filter(signal => signalActiveAt(signal, atTime));
   const committedCapital = open.reduce((sum, signal) => sum + Math.max(0, signal.ledgerAllocationUsdt ?? 0), 0);
   return {
     market,
@@ -1842,9 +1864,9 @@ function ledgerVenueCapitalSnapshot(market: TradingVenue, excludeSignalId?: numb
   };
 }
 
-function ledgerCapitalSnapshot(excludeSignalId?: number) {
-  const spot = ledgerVenueCapitalSnapshot('spot', excludeSignalId);
-  const futures = ledgerVenueCapitalSnapshot('futures', excludeSignalId);
+function ledgerCapitalSnapshot(excludeSignalId?: number, sourceSignals = signals, atTime = Date.now()) {
+  const spot = ledgerVenueCapitalSnapshot('spot', excludeSignalId, sourceSignals, atTime);
+  const futures = ledgerVenueCapitalSnapshot('futures', excludeSignalId, sourceSignals, atTime);
   return {
     startingCapital: spot.startingCapital + futures.startingCapital,
     currentCapital: spot.currentCapital + futures.currentCapital,
@@ -1904,35 +1926,147 @@ function formatBinancePrice(price: number, rules: SymbolInfo | null) {
   return normalizedPrice.toFixed(precision).replace(/\.?0+$/, '');
 }
 
-function applyLedgerSimulation(candidate: SignalCandidate) {
-  const { signal } = candidate;
-  signal.ledgerSimulationStatus = 'accepted';
-  signal.ledgerSimulationNotes = ['Accepted directly from strategy generation.'];
-  signal.ledgerPnlEligible = true;
-  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt;
-  const snapshot = ledgerVenueCapitalSnapshot(signal.market, signal.id);
-  const venueMaxOpen = ledgerVenueMaxOpenTrades(signal.market);
-  const minNotional = ledgerVenueMinNotional(signal.market);
-  const slotAllocation = ledgerSimulationSettings.allocationMethod === 'available'
-    ? snapshot.availableCapital
-    : snapshot.deployableCapital / Math.max(1, venueMaxOpen);
-  const allocation = Number.isFinite(slotAllocation) && slotAllocation > 0 ? Math.max(minNotional, slotAllocation) : minNotional;
+function clearLedgerSimulationState(signal: TradeSignal) {
+  delete signal.ledgerSimulationStatus;
+  delete signal.ledgerSimulationNotes;
+  delete signal.ledgerPnlEligible;
+  delete signal.ledgerStrategyLedgerEligible;
+  delete signal.ledgerStartingCapitalUsdt;
+  delete signal.ledgerAvailableCapitalUsdt;
+  delete signal.ledgerAllocationUsdt;
+  delete signal.ledgerNotionalUsdt;
+  delete signal.ledgerQuantity;
+  delete signal.ledgerEstimatedFeeUsdt;
+  delete signal.ledgerEstimatedSlippageUsdt;
+  delete signal.ledgerRiskAmountUsdt;
+  delete signal.ledgerRiskPctOfCapital;
+  delete signal.ledgerMinNotionalUsdt;
+  delete signal.ledgerNormalizedEntry;
+  delete signal.ledgerNormalizedTakeProfit;
+  delete signal.ledgerNormalizedStopLoss;
+}
+
+function applyLedgerSimulationToSignal(signal: TradeSignal, sourceSignals = signals, atTime = signal.openedAt) {
+  clearLedgerSimulationState(signal);
+
+  const notes: string[] = [];
   const leverage = signal.market === 'futures' ? ledgerSimulationSettings.futuresLeverage : 1;
-  const notional = allocation * leverage;
-  const riskAmount = notional * (signal.riskPct / 100);
-  const riskPctOfCapital = snapshot.currentCapital > 0 ? (riskAmount / snapshot.currentCapital) * 100 : 0;
+  const snapshot = ledgerVenueCapitalSnapshot(signal.market, signal.id, sourceSignals, atTime);
+  const venueMaxOpen = ledgerVenueMaxOpenTrades(signal.market);
+  const rules = getSymbolRules(signal.symbol, signal.market);
+  const rulesLoaded = symbolRulesLoaded(signal.market);
+  const exchangeMinNotional = Math.max(0, rules?.minNotional ?? 0);
+  const minAllocation = Math.max(ledgerVenueMinNotional(signal.market), exchangeMinNotional / leverage);
+  const duplicateOpen = sourceSignals.some(item =>
+    item.id !== signal.id
+    && item.symbol === signal.symbol
+    && countsInLedgerSimulation(item)
+    && signalActiveAt(item, atTime)
+  );
+
+  signal.ledgerStrategyLedgerEligible = duplicateOpen ? false : true;
+  signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt;
   signal.ledgerAvailableCapitalUsdt = snapshot.availableCapital;
-  signal.ledgerAllocationUsdt = allocation;
-  signal.ledgerNotionalUsdt = notional;
-  signal.ledgerQuantity = notional / Math.max(signal.entry, 0.00000001);
-  signal.ledgerEstimatedFeeUsdt = notional * (ledgerFeeRatePct(signal.market) / 100);
-  signal.ledgerEstimatedSlippageUsdt = notional * (ledgerSimulationSettings.slippagePct / 100);
-  signal.ledgerRiskAmountUsdt = riskAmount;
-  signal.ledgerRiskPctOfCapital = riskPctOfCapital;
-  signal.ledgerMinNotionalUsdt = minNotional;
+  signal.ledgerMinNotionalUsdt = minAllocation;
   signal.ledgerNormalizedEntry = signal.entry;
   signal.ledgerNormalizedTakeProfit = signal.takeProfit;
   signal.ledgerNormalizedStopLoss = signal.stopLoss;
+
+  if (!ledgerSimulationSettings.enabled) notes.push('Ledger simulation disabled');
+  if (ledgerSimulationSettings.marketScope !== 'both' && ledgerSimulationSettings.marketScope !== signal.market) notes.push('Market scope not allowed');
+  if (signal.market === 'spot' && signal.side === 'SHORT') notes.push('Spot short not supported');
+  if (ledgerSimulationSettings.allowedDirection === 'long-only' && signal.side === 'SHORT') notes.push('Direction not allowed');
+  if (ledgerSimulationSettings.allowedDirection === 'short-only' && signal.side === 'LONG') notes.push('Direction not allowed');
+  if (duplicateOpen) notes.push('Duplicate symbol open');
+  if (snapshot.open.length >= venueMaxOpen) notes.push(`${signal.market === 'spot' ? 'Spot' : 'Futures'} max open reached`);
+  if (snapshot.availableCapital <= 0) notes.push('No available capital');
+  if (rulesLoaded && !rules) notes.push('Symbol not tradable');
+
+  const baseAllocation = ledgerSimulationSettings.allocationMethod === 'available'
+    ? snapshot.availableCapital
+    : Math.min(snapshot.availableCapital, snapshot.deployableCapital / Math.max(1, venueMaxOpen));
+  const maxRiskAmount = Math.max(0, snapshot.currentCapital * (ledgerSimulationSettings.riskPerTradePct / 100));
+  const riskSizedAllocation = signal.riskPct > 0
+    ? maxRiskAmount / (signal.riskPct / 100) / leverage
+    : baseAllocation;
+  const allocation = Math.max(0, Math.min(baseAllocation, riskSizedAllocation));
+  const notional = allocation * leverage;
+  const quantity = notional / Math.max(signal.entry, 0.00000001);
+  const minQty = Math.max(0, rules?.minQty ?? 0);
+
+  if (baseAllocation < minAllocation) notes.push('Below min order');
+  if (riskSizedAllocation < minAllocation) notes.push('Risk per trade below min order');
+  if (exchangeMinNotional > 0 && notional < exchangeMinNotional) notes.push('Exchange min notional not met');
+  if (minQty > 0 && quantity < minQty) notes.push('Exchange min quantity not met');
+
+  signal.ledgerAllocationUsdt = notes.length === 0 ? allocation : 0;
+  signal.ledgerNotionalUsdt = notes.length === 0 ? notional : 0;
+  signal.ledgerQuantity = notes.length === 0 ? quantity : 0;
+  signal.ledgerEstimatedFeeUsdt = notes.length === 0 ? notional * (ledgerFeeRatePct(signal.market) / 100) : 0;
+  signal.ledgerEstimatedSlippageUsdt = notes.length === 0 ? notional * (ledgerSimulationSettings.slippagePct / 100) : 0;
+  signal.ledgerRiskAmountUsdt = notes.length === 0 ? notional * (signal.riskPct / 100) : 0;
+  signal.ledgerRiskPctOfCapital = snapshot.currentCapital > 0 ? ((signal.ledgerRiskAmountUsdt ?? 0) / snapshot.currentCapital) * 100 : 0;
+
+  if (notes.length > 0) {
+    signal.ledgerSimulationStatus = 'rejected';
+    signal.ledgerSimulationNotes = Array.from(new Set(notes));
+    signal.ledgerPnlEligible = false;
+    return signal;
+  }
+
+  signal.ledgerSimulationStatus = 'accepted';
+  signal.ledgerSimulationNotes = ['Accepted by ledger simulation.'];
+  signal.ledgerPnlEligible = true;
+  return signal;
+}
+
+function applyLedgerSimulation(candidate: SignalCandidate) {
+  return applyLedgerSimulationToSignal(candidate.signal);
+}
+
+function replayDashboardLedgerSimulation() {
+  let changed = false;
+  const chronological = [...signals].sort((a, b) => a.openedAt - b.openedAt || a.id - b.id);
+  const simulated: TradeSignal[] = [];
+  for (const signal of chronological) {
+    const before = JSON.stringify({
+      ledgerSimulationStatus: signal.ledgerSimulationStatus,
+      ledgerSimulationNotes: signal.ledgerSimulationNotes,
+      ledgerPnlEligible: signal.ledgerPnlEligible,
+      ledgerStrategyLedgerEligible: signal.ledgerStrategyLedgerEligible,
+      ledgerStartingCapitalUsdt: signal.ledgerStartingCapitalUsdt,
+      ledgerAvailableCapitalUsdt: signal.ledgerAvailableCapitalUsdt,
+      ledgerAllocationUsdt: signal.ledgerAllocationUsdt,
+      ledgerNotionalUsdt: signal.ledgerNotionalUsdt,
+      ledgerQuantity: signal.ledgerQuantity,
+      ledgerEstimatedFeeUsdt: signal.ledgerEstimatedFeeUsdt,
+      ledgerEstimatedSlippageUsdt: signal.ledgerEstimatedSlippageUsdt,
+      ledgerRiskAmountUsdt: signal.ledgerRiskAmountUsdt,
+      ledgerRiskPctOfCapital: signal.ledgerRiskPctOfCapital,
+      ledgerMinNotionalUsdt: signal.ledgerMinNotionalUsdt
+    });
+    applyLedgerSimulationToSignal(signal, simulated, signal.openedAt);
+    const after = JSON.stringify({
+      ledgerSimulationStatus: signal.ledgerSimulationStatus,
+      ledgerSimulationNotes: signal.ledgerSimulationNotes,
+      ledgerPnlEligible: signal.ledgerPnlEligible,
+      ledgerStrategyLedgerEligible: signal.ledgerStrategyLedgerEligible,
+      ledgerStartingCapitalUsdt: signal.ledgerStartingCapitalUsdt,
+      ledgerAvailableCapitalUsdt: signal.ledgerAvailableCapitalUsdt,
+      ledgerAllocationUsdt: signal.ledgerAllocationUsdt,
+      ledgerNotionalUsdt: signal.ledgerNotionalUsdt,
+      ledgerQuantity: signal.ledgerQuantity,
+      ledgerEstimatedFeeUsdt: signal.ledgerEstimatedFeeUsdt,
+      ledgerEstimatedSlippageUsdt: signal.ledgerEstimatedSlippageUsdt,
+      ledgerRiskAmountUsdt: signal.ledgerRiskAmountUsdt,
+      ledgerRiskPctOfCapital: signal.ledgerRiskPctOfCapital,
+      ledgerMinNotionalUsdt: signal.ledgerMinNotionalUsdt
+    });
+    if (before !== after) changed = true;
+    simulated.push(signal);
+  }
+  if (changed) invalidateComputedCaches();
+  return changed;
 }
 
 function isHiddenExecutionFailure(notes?: string[]) {
@@ -2999,6 +3133,7 @@ function stripExecutionLedgerState(signal: TradeSignal) {
   delete signal.ledgerSimulationStatus;
   delete signal.ledgerSimulationNotes;
   delete signal.ledgerPnlEligible;
+  delete signal.ledgerStrategyLedgerEligible;
   delete signal.ledgerStartingCapitalUsdt;
   delete signal.ledgerAvailableCapitalUsdt;
   delete signal.ledgerAllocationUsdt;
@@ -3255,6 +3390,7 @@ function loadState() {
       }
     }
   }
+  if (replayDashboardLedgerSimulation()) repairedState = true;
   for (const signal of executionSignals) {
     stripExecutionLedgerState(signal);
     if (signal.sourceSignalId == null) {
@@ -5929,6 +6065,7 @@ app.get('/api/ledger-simulation', (_req, res) => {
 });
 app.patch('/api/ledger-simulation', requireAuth, (req, res) => {
   ledgerSimulationSettings = buildLedgerSimulationSettingsPatch(req.body ?? {});
+  replayDashboardLedgerSimulation();
   invalidateComputedCaches();
   saveState();
   res.json({ ok: true, settings: ledgerSimulationSettings, snapshot: ledgerCapitalSnapshot() });
@@ -6589,6 +6726,7 @@ async function initializeRuntime() {
   await runStartupStep('spot ticker poll', pollTickersFallback);
   await runStartupStep('futures ticker poll', pollFuturesTickersFallback);
   ensureSymbolUniversesFromTickers();
+  if (replayDashboardLedgerSimulation()) saveState();
   await runStartupStep('market scan', scanMarket);
   await runStartupStep('ledger execution sync', processLedgerExecutions);
   setInterval(pollTickersFallback, 5000);

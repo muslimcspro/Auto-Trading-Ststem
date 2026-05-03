@@ -6228,8 +6228,8 @@ video {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .ledger-shared-grid {
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
-  max-width: 900px;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  max-width: 1150px;
 }
 .ledger-simulation-grid label {
   display: grid;

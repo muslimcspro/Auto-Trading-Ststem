@@ -43,6 +43,7 @@ type Signal = {
   ledgerSimulationStatus?: 'accepted' | 'rejected';
   ledgerSimulationNotes?: string[];
   ledgerPnlEligible?: boolean;
+  ledgerStrategyLedgerEligible?: boolean;
   ledgerStartingCapitalUsdt?: number;
   ledgerAvailableCapitalUsdt?: number;
   ledgerAllocationUsdt?: number;
@@ -6120,7 +6121,7 @@ function PerformanceChart({
   }), [signals, ledgerRangeStart, ledgerRangeEnd]);
   const filterScopeSignals = useMemo(() => ledgerMetricScope === 'accepted'
     ? ledgerRangeSignals.filter(signal => signal.ledgerSimulationStatus !== 'rejected' && signal.ledgerPnlEligible !== false)
-    : ledgerRangeSignals, [ledgerMetricScope, ledgerRangeSignals]);
+    : ledgerRangeSignals.filter(signal => signal.ledgerStrategyLedgerEligible !== false), [ledgerMetricScope, ledgerRangeSignals]);
   const filterCounts = useMemo(() => getSignalFilterCounts(filterScopeSignals, ledgerStatusFilter, ledgerSideFilter), [filterScopeSignals, ledgerStatusFilter, ledgerSideFilter]);
   const ledgerSignals = useMemo(() => ledgerRangeSignals.filter(signal => {
     const marketMatches = ledgerMarketFilter === 'all' ? true : (signal.market ?? 'spot') === ledgerMarketFilter;
@@ -6145,10 +6146,11 @@ function PerformanceChart({
   }), [ledgerSignals, tickers, futuresTickers]);
   const acceptedBaseRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [tradeRows]);
   const rejectedBaseRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus === 'rejected' || row.ledgerPnlEligible === false), [tradeRows]);
+  const allStrategyBaseRows = useMemo(() => tradeRows.filter(row => row.ledgerStrategyLedgerEligible !== false), [tradeRows]);
   const acceptedTradeRows = useMemo(() => acceptedBaseRows.filter(row => tradeSearchMatches(row, ledgerTradeQuery)), [acceptedBaseRows, ledgerTradeQuery]);
   const rejectedTradeRows = useMemo(() => rejectedBaseRows.filter(row => tradeSearchMatches(row, rejectedLedgerTradeQuery)), [rejectedBaseRows, rejectedLedgerTradeQuery]);
-  const allStrategyTradeRows = useMemo(() => tradeRows.filter(row => tradeSearchMatches(row, allStrategyLedgerTradeQuery)), [tradeRows, allStrategyLedgerTradeQuery]);
-  const metricRows = useMemo(() => ledgerMetricScope === 'accepted' ? acceptedBaseRows : tradeRows, [ledgerMetricScope, acceptedBaseRows, tradeRows]);
+  const allStrategyTradeRows = useMemo(() => allStrategyBaseRows.filter(row => tradeSearchMatches(row, allStrategyLedgerTradeQuery)), [allStrategyBaseRows, allStrategyLedgerTradeQuery]);
+  const metricRows = useMemo(() => ledgerMetricScope === 'accepted' ? acceptedBaseRows : allStrategyBaseRows, [ledgerMetricScope, acceptedBaseRows, allStrategyBaseRows]);
   const bestTrade = useMemo(() => metricRows.reduce<SignalTradeRow | null>((best, row) => !best || row.pnl > best.pnl ? row : best, null), [metricRows]);
   const worstTrade = useMemo(() => metricRows.reduce<SignalTradeRow | null>((worst, row) => !worst || row.pnl < worst.pnl ? row : worst, null), [metricRows]);
   const ledgerStats = useMemo(() => ({
@@ -6508,6 +6510,8 @@ function PerformanceChart({
           <label><span>Risk %</span><input type="number" min={0.1} max={20} step={0.1} value={ledgerSimulationDraft.riskPerTradePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, riskPerTradePct: Number(event.target.value) })} /></label>
           <label><span>Slip %</span><input type="number" min={0} max={5} step={0.01} value={ledgerSimulationDraft.slippagePct} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, slippagePct: Number(event.target.value) })} /></label>
           <label><span>Allocation</span><select value={ledgerSimulationDraft.allocationMethod} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allocationMethod: event.target.value as LedgerSimulationSettings['allocationMethod'] })}><option value="equal">Equal slots</option><option value="available">Use available</option></select></label>
+          <label><span>Market Scope</span><select value={ledgerSimulationDraft.marketScope} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, marketScope: event.target.value as LedgerSimulationSettings['marketScope'] })}><option value="both">Spot + Futures</option><option value="spot">Spot only</option><option value="futures">Futures only</option></select></label>
+          <label><span>Direction</span><select value={ledgerSimulationDraft.allowedDirection} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allowedDirection: event.target.value as LedgerSimulationSettings['allowedDirection'] })}><option value="both">Both</option><option value="long-only">Long only</option><option value="short-only">Short only</option></select></label>
         </div>
       </div>}
         {tradeRows.length === 0 && <p className="empty">No trades generated for this selection yet.</p>}
