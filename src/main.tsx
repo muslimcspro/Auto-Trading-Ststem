@@ -562,6 +562,16 @@ const ledgerRejectReason = (signal: Pick<Signal, 'ledgerSimulationNotes' | 'ledg
     ? signal.ledgerSimulationNotes?.[0] ?? 'Rejected by ledger simulation.'
     : '';
 
+const tradeSearchMatches = (signal: Pick<Signal, 'id' | 'symbol' | 'strategyName'>, query: string) => {
+  const normalized = query.trim().toUpperCase();
+  if (!normalized) return true;
+  const compactTradeId = normalized.replace(/^T-?/, '');
+  return formatTradeLabel(signal.id).toUpperCase().includes(normalized)
+    || String(signal.id).includes(compactTradeId)
+    || signal.symbol.toUpperCase().includes(normalized)
+    || signal.strategyName.toUpperCase().includes(normalized);
+};
+
 const formatPrivateVenueLabel = (signal: Pick<Signal, 'market' | 'executionLeverage'>) =>
   signal.market === 'futures' ? `Futures x${Math.max(1, signal.executionLeverage ?? 1)}` : 'Spot';
 
@@ -6006,7 +6016,10 @@ function PerformanceChart({
   const [ledgerMarketFilter, setLedgerMarketFilter] = useState<'all' | 'spot' | 'futures'>('all');
   const [ledgerTimeframeFilter, setLedgerTimeframeFilter] = useState<'all' | Timeframe>('all');
   const [ledgerExecutionProfileFilter, setLedgerExecutionProfileFilter] = useState<'all' | ExitMode>('all');
+  const [ledgerMetricScope, setLedgerMetricScope] = useState<'accepted' | 'strategies'>('accepted');
   const [ledgerTradeQuery, setLedgerTradeQuery] = useState('');
+  const [rejectedLedgerTradeQuery, setRejectedLedgerTradeQuery] = useState('');
+  const [allStrategyLedgerTradeQuery, setAllStrategyLedgerTradeQuery] = useState('');
   const [ledgerSimulationSettings, setLedgerSimulationSettings] = useState<LedgerSimulationSettings | null>(null);
   const [ledgerSimulationDraft, setLedgerSimulationDraft] = useState<LedgerSimulationSettings | null>(null);
   const [ledgerSimulationSnapshot, setLedgerSimulationSnapshot] = useState<LedgerSimulationSnapshot | null>(null);
@@ -6101,36 +6114,22 @@ function PerformanceChart({
   const ledgerRangeEnd = ledgerRange === 'custom'
     ? new Date(`${ledgerCustomTo}T23:59:59.999`).getTime() || Date.now()
     : Date.now();
-  const ledgerBaseSignals = useMemo(() => signals.filter(signal => {
+  const ledgerRangeSignals = useMemo(() => signals.filter(signal => {
     const stamp = rangeSignalTimestamp(signal);
+    return stamp >= ledgerRangeStart && stamp <= ledgerRangeEnd;
+  }), [signals, ledgerRangeStart, ledgerRangeEnd]);
+  const filterScopeSignals = useMemo(() => ledgerMetricScope === 'accepted'
+    ? ledgerRangeSignals.filter(signal => signal.ledgerSimulationStatus !== 'rejected' && signal.ledgerPnlEligible !== false)
+    : ledgerRangeSignals, [ledgerMetricScope, ledgerRangeSignals]);
+  const filterCounts = useMemo(() => getSignalFilterCounts(filterScopeSignals, ledgerStatusFilter, ledgerSideFilter), [filterScopeSignals, ledgerStatusFilter, ledgerSideFilter]);
+  const ledgerSignals = useMemo(() => ledgerRangeSignals.filter(signal => {
     const marketMatches = ledgerMarketFilter === 'all' ? true : (signal.market ?? 'spot') === ledgerMarketFilter;
-    return stamp >= ledgerRangeStart && stamp <= ledgerRangeEnd && marketMatches;
-  }), [signals, ledgerRangeStart, ledgerRangeEnd, ledgerMarketFilter]);
-  const ledgerBaseRows = useMemo(() => ledgerBaseSignals.map(signal => {
-    const marketPrice = signal.status === 'OPEN'
-      ? signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price
-      : signal.closePrice;
-    const pnl = getSignalPnl(signal, marketPrice);
-    return {
-      ...signal,
-      marketPrice,
-      label: formatTradeLabel(signal.id),
-      pnl,
-      pnlLabel: formatSignedPct(pnl)
-    };
-  }), [ledgerBaseSignals, tickers, futuresTickers]);
-  const normalizedLedgerTradeQuery = ledgerTradeQuery.trim().toUpperCase();
-  const ledgerSignals = useMemo(() => ledgerBaseSignals.filter(signal => {
-    const tradeLabel = formatTradeLabel(signal.id).toUpperCase();
-    const tradeQueryMatches = !normalizedLedgerTradeQuery
-      || tradeLabel.includes(normalizedLedgerTradeQuery)
-      || String(signal.id).includes(normalizedLedgerTradeQuery.replace(/^T-?/, ''));
     return statusMatches(signal, ledgerStatusFilter)
       && sideMatches(signal, ledgerSideFilter)
+      && marketMatches
       && (ledgerTimeframeFilter === 'all' || signal.timeframe === ledgerTimeframeFilter)
-      && (ledgerExecutionProfileFilter === 'all' || signal.exitMode === ledgerExecutionProfileFilter)
-      && tradeQueryMatches;
-  }), [ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter, ledgerTimeframeFilter, ledgerExecutionProfileFilter, normalizedLedgerTradeQuery]);
+      && (ledgerExecutionProfileFilter === 'all' || signal.exitMode === ledgerExecutionProfileFilter);
+  }), [ledgerRangeSignals, ledgerStatusFilter, ledgerSideFilter, ledgerMarketFilter, ledgerTimeframeFilter, ledgerExecutionProfileFilter]);
   const tradeRows = useMemo(() => ledgerSignals.map(signal => {
     const marketPrice = signal.status === 'OPEN'
       ? signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price
@@ -6144,21 +6143,27 @@ function PerformanceChart({
       pnlLabel: formatSignedPct(pnl)
     };
   }), [ledgerSignals, tickers, futuresTickers]);
-  const acceptedTradeRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [tradeRows]);
-  const rejectedTradeRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus === 'rejected' || row.ledgerPnlEligible === false), [tradeRows]);
-  const ledgerAcceptedRows = useMemo(() => ledgerBaseRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [ledgerBaseRows]);
-  const bestTrade = useMemo(() => ledgerAcceptedRows.reduce<SignalTradeRow | null>((best, row) => !best || row.pnl > best.pnl ? row : best, null), [ledgerAcceptedRows]);
-  const worstTrade = useMemo(() => ledgerAcceptedRows.reduce<SignalTradeRow | null>((worst, row) => !worst || row.pnl < worst.pnl ? row : worst, null), [ledgerAcceptedRows]);
+  const acceptedBaseRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [tradeRows]);
+  const rejectedBaseRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus === 'rejected' || row.ledgerPnlEligible === false), [tradeRows]);
+  const acceptedTradeRows = useMemo(() => acceptedBaseRows.filter(row => tradeSearchMatches(row, ledgerTradeQuery)), [acceptedBaseRows, ledgerTradeQuery]);
+  const rejectedTradeRows = useMemo(() => rejectedBaseRows.filter(row => tradeSearchMatches(row, rejectedLedgerTradeQuery)), [rejectedBaseRows, rejectedLedgerTradeQuery]);
+  const allStrategyTradeRows = useMemo(() => tradeRows.filter(row => tradeSearchMatches(row, allStrategyLedgerTradeQuery)), [tradeRows, allStrategyLedgerTradeQuery]);
+  const metricRows = useMemo(() => ledgerMetricScope === 'accepted' ? acceptedBaseRows : tradeRows, [ledgerMetricScope, acceptedBaseRows, tradeRows]);
+  const bestTrade = useMemo(() => metricRows.reduce<SignalTradeRow | null>((best, row) => !best || row.pnl > best.pnl ? row : best, null), [metricRows]);
+  const worstTrade = useMemo(() => metricRows.reduce<SignalTradeRow | null>((worst, row) => !worst || row.pnl < worst.pnl ? row : worst, null), [metricRows]);
   const ledgerStats = useMemo(() => ({
-    winCount: acceptedTradeRows.filter(row => row.status === 'WIN').length,
-    lossCount: acceptedTradeRows.filter(row => row.status === 'LOSS').length,
-    openCount: acceptedTradeRows.filter(row => row.status === 'OPEN').length,
-    longCount: acceptedTradeRows.filter(row => row.side === 'LONG').length,
-    shortCount: acceptedTradeRows.filter(row => row.side === 'SHORT').length
-  }), [acceptedTradeRows]);
-  const ledgerPnlCards = useMemo(() => summarizeTradeRowPnl(acceptedTradeRows), [acceptedTradeRows]);
-  const allStrategyPnlCards = useMemo(() => summarizeTradeRowPnl(tradeRows), [tradeRows]);
-  const filterCounts = useMemo(() => getSignalFilterCounts(ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter), [ledgerBaseSignals, ledgerStatusFilter, ledgerSideFilter]);
+    winCount: metricRows.filter(row => row.status === 'WIN').length,
+    lossCount: metricRows.filter(row => row.status === 'LOSS').length,
+    openCount: metricRows.filter(row => row.status === 'OPEN').length,
+    longCount: metricRows.filter(row => row.side === 'LONG').length,
+    shortCount: metricRows.filter(row => row.side === 'SHORT').length,
+    spotCount: metricRows.filter(row => row.market === 'spot').length,
+    futuresCount: metricRows.filter(row => row.market === 'futures').length
+  }), [metricRows]);
+  const metricPnlCards = useMemo(() => summarizeTradeRowPnl(metricRows), [metricRows]);
+  const acceptedLedgerPnlCards = useMemo(() => summarizeTradeRowPnl(acceptedTradeRows), [acceptedTradeRows]);
+  const allStrategyPnlCards = useMemo(() => summarizeTradeRowPnl(allStrategyTradeRows), [allStrategyTradeRows]);
+  const ledgerMetricScopeLabel = ledgerMetricScope === 'accepted' ? 'Accepted Simulation' : 'All Strategies';
   const performanceRows = useMemo(() => performanceSignals.map(signal => {
     const marketPrice = tickers.get(signal.symbol)?.price;
     return { pnl: getSignalPnl(signal, marketPrice) };
@@ -6395,6 +6400,67 @@ function PerformanceChart({
         <CustomDateField label="From" value={ledgerCustomFrom} max={ledgerCustomTo} onChange={setLedgerCustomFrom} />
         <CustomDateField label="To" value={ledgerCustomTo} min={ledgerCustomFrom} onChange={setLedgerCustomTo} />
       </div>}
+      <div className="ledger-scope-switch" role="group" aria-label="Ledger metrics scope">
+        <span>Metrics Source</span>
+        <button type="button" className={ledgerMetricScope === 'accepted' ? 'active' : ''} onClick={() => setLedgerMetricScope('accepted')}>Accepted Simulation</button>
+        <button type="button" className={ledgerMetricScope === 'strategies' ? 'active' : ''} onClick={() => setLedgerMetricScope('strategies')}>All Strategies</button>
+      </div>
+      <div className="trade-extremes">
+        <div className="trade-extremes-row trade-extremes-row-top">
+          <button type="button" className="trade-extreme-card" onClick={() => bestTrade && (ledgerMetricScope === 'accepted' ? focusTrade(bestTrade.id) : setChartTrade(bestTrade))}>
+            <span>Best Trade</span>
+            <strong className="good">{bestTrade ? bestTrade.pnlLabel : 'N/A'}</strong>
+            <small>{bestTrade ? `${bestTrade.symbol} | ${bestTrade.strategyName}` : `No ${ledgerMetricScopeLabel} trades yet`}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={() => worstTrade && (ledgerMetricScope === 'accepted' ? focusTrade(worstTrade.id) : setChartTrade(worstTrade))}>
+            <span>Worst Trade</span>
+            <strong className="bad">{worstTrade ? worstTrade.pnlLabel : 'N/A'}</strong>
+            <small>{worstTrade ? `${worstTrade.symbol} | ${worstTrade.strategyName}` : `No ${ledgerMetricScopeLabel} trades yet`}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={cycleLedgerOutcomeFilter}>
+            <span>Wins / Losses</span>
+            <strong><b className="good">{ledgerStats.winCount}</b> / <b className="bad">{ledgerStats.lossCount}</b></strong>
+            <small>{`${ledgerStats.openCount} ${ledgerMetricScopeLabel} trades still open`}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={cycleLedgerSideFilter}>
+            <span>Long / Short</span>
+            <strong><b className="good">{ledgerStats.longCount}</b> / <b className="bad">{ledgerStats.shortCount}</b></strong>
+            <small>{ledgerSideFilter === 'all' ? `Showing both sides for ${ledgerMetricScopeLabel}` : ledgerSideFilter === 'long' ? 'LONG filter active' : 'SHORT filter active'}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={cycleLedgerMarketFilter}>
+            <span>Spot / Futures</span>
+            <strong><b>{ledgerStats.spotCount}</b> / <b>{ledgerStats.futuresCount}</b></strong>
+            <small>{ledgerMarketFilter === 'all' ? `Showing both venues for ${ledgerMetricScopeLabel}` : ledgerMarketFilter === 'spot' ? 'Spot filter active' : 'Futures filter active'}</small>
+          </button>
+        </div>
+        <div className="trade-extremes-row trade-extremes-row-bottom">
+          <button type="button" className="trade-extreme-card" onClick={toggleOpenPnlFocus}>
+            <span>Open PnL</span>
+            <strong className={metricPnlCards.openPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(metricPnlCards.openPnl)}</strong>
+            <small>{ledgerStatusFilter === 'open' ? 'OPEN filter active' : `${ledgerMetricScopeLabel} unrealized performance`}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={toggleClosedPnlFocus}>
+            <span>Closed PnL</span>
+            <strong className={metricPnlCards.closedPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(metricPnlCards.closedPnl)}</strong>
+            <small>{ledgerStatusFilter === 'closed' ? 'CLOSED filter active' : `${ledgerMetricScopeLabel} realized performance`}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={() => { setFocusedTradeId(null); setLedgerStatusFilter('all'); resetLedgerScroll(); }}>
+            <span>Net PnL</span>
+            <strong className={metricPnlCards.netPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(metricPnlCards.netPnl)}</strong>
+            <small>{`Spot ${formatSignedPct(metricPnlCards.spotPnl)} | Futures ${formatSignedPct(metricPnlCards.futuresPnl)}`}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={cycleLedgerModeFilter}>
+            <span>Mode</span>
+            <strong>{ledgerExecutionProfileFilter === 'all' ? 'All' : formatExitModeLabel(ledgerExecutionProfileFilter)}</strong>
+            <small>{ledgerExecutionProfileFilter === 'all' ? `${ledgerMetricScopeLabel} across every mode` : `${formatExitModeLabel(ledgerExecutionProfileFilter)} filter active`}</small>
+          </button>
+          <button type="button" className="trade-extreme-card" onClick={cycleLedgerTimeframeFilter}>
+            <span>Timeframe</span>
+            <strong>{ledgerTimeframeFilter === 'all' ? 'All' : ledgerTimeframeFilter}</strong>
+            <small>{ledgerTimeframeFilter === 'all' ? `${ledgerMetricScopeLabel} across every timeframe` : `${ledgerTimeframeFilter} filter active`}</small>
+          </button>
+        </div>
+      </div>
       <SignalFilterBar
         statusFilter={ledgerStatusFilter}
         sideFilter={ledgerSideFilter}
@@ -6459,7 +6525,7 @@ function PerformanceChart({
                 setLedgerTradeQuery(event.target.value);
                 resetLedgerScroll();
               }}
-              placeholder="Search by trade number: T-0002B"
+              placeholder="Search accepted: T-0002B, symbol, strategy"
               spellCheck={false}
               autoComplete="off"
             />
@@ -6516,15 +6582,28 @@ function PerformanceChart({
         </div>
       </div>}
       {tradeRows.length > 0 && <div className="ledger-pnl-split ledger-pnl-split-wide accepted-simulation-pnl-split">
-        <article><span>Accepted Open PnL</span><strong className={ledgerPnlCards.openPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(ledgerPnlCards.openPnl)}</strong><small>{formatSignedUsdtValue(ledgerPnlCards.openUsdt)}</small></article>
-        <article><span>Accepted Closed PnL</span><strong className={ledgerPnlCards.closedPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(ledgerPnlCards.closedPnl)}</strong><small>{formatSignedUsdtValue(ledgerPnlCards.closedUsdt)}</small></article>
-        <article><span>Accepted Net PnL</span><strong className={ledgerPnlCards.netPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(ledgerPnlCards.netPnl)}</strong><small>{formatSignedUsdtValue(ledgerPnlCards.netUsdt)}</small></article>
-        <article><span>Accepted Spot PnL</span><strong className={ledgerPnlCards.spotPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(ledgerPnlCards.spotPnl)}</strong><small>{formatSignedUsdtValue(ledgerPnlCards.spotUsdt)}</small></article>
-        <article><span>Accepted Futures PnL</span><strong className={ledgerPnlCards.futuresPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(ledgerPnlCards.futuresPnl)}</strong><small>{formatSignedUsdtValue(ledgerPnlCards.futuresUsdt)}</small></article>
+        <article><span>Accepted Open PnL</span><strong className={acceptedLedgerPnlCards.openPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(acceptedLedgerPnlCards.openPnl)}</strong><small>{formatSignedUsdtValue(acceptedLedgerPnlCards.openUsdt)}</small></article>
+        <article><span>Accepted Closed PnL</span><strong className={acceptedLedgerPnlCards.closedPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(acceptedLedgerPnlCards.closedPnl)}</strong><small>{formatSignedUsdtValue(acceptedLedgerPnlCards.closedUsdt)}</small></article>
+        <article><span>Accepted Net PnL</span><strong className={acceptedLedgerPnlCards.netPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(acceptedLedgerPnlCards.netPnl)}</strong><small>{formatSignedUsdtValue(acceptedLedgerPnlCards.netUsdt)}</small></article>
+        <article><span>Accepted Spot PnL</span><strong className={acceptedLedgerPnlCards.spotPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(acceptedLedgerPnlCards.spotPnl)}</strong><small>{formatSignedUsdtValue(acceptedLedgerPnlCards.spotUsdt)}</small></article>
+        <article><span>Accepted Futures PnL</span><strong className={acceptedLedgerPnlCards.futuresPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(acceptedLedgerPnlCards.futuresPnl)}</strong><small>{formatSignedUsdtValue(acceptedLedgerPnlCards.futuresUsdt)}</small></article>
       </div>}
-      {rejectedTradeRows.length > 0 && <div className="trade-ledger-shell trade-ledger-shell-rejected">
+      {tradeRows.length > 0 && <div className="trade-ledger-shell trade-ledger-shell-rejected">
         <div className="trade-ledger-toolbar">
           <strong className="portfolio-ledger-title">Rejected Simulation</strong>
+          <div className="ledger-search-input trade-ledger-search">
+            <Search size={16} />
+            <input
+              id="rejected-ledger-trade-search"
+              type="search"
+              value={rejectedLedgerTradeQuery}
+              onChange={event => setRejectedLedgerTradeQuery(event.target.value)}
+              placeholder="Search rejected: T-0002B, symbol, strategy"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {rejectedLedgerTradeQuery && <button type="button" className="ledger-search-clear" onClick={() => setRejectedLedgerTradeQuery('')}>Clear</button>}
+          </div>
         </div>
         <div className="trade-ledger-scroll rejected-ledger-scroll">
           <table className="trade-ledger trade-ledger-body sim-rejected-table">
@@ -6534,6 +6613,7 @@ function PerformanceChart({
               </tr>
             </thead>
             <tbody>
+              {rejectedTradeRows.length === 0 && <tr><td colSpan={7} className="empty">No Rejected Simulation trades matched this selection.</td></tr>}
               {rejectedTradeRows.map(row => <tr key={`rejected-${row.id}`} className="chartable-row" onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
                 <td>{formatTradeLabel(row.id)}</td>
                 <td><strong>{row.symbol}</strong></td>
@@ -6551,6 +6631,19 @@ function PerformanceChart({
         <div className="trade-ledger-shell trade-ledger-shell-all-strategy">
           <div className="trade-ledger-toolbar">
             <strong className="portfolio-ledger-title">All Strategy Trades</strong>
+            <div className="ledger-search-input trade-ledger-search">
+              <Search size={16} />
+              <input
+                id="all-strategy-ledger-trade-search"
+                type="search"
+                value={allStrategyLedgerTradeQuery}
+                onChange={event => setAllStrategyLedgerTradeQuery(event.target.value)}
+                placeholder="Search strategies: T-0002B, symbol, strategy"
+                spellCheck={false}
+                autoComplete="off"
+              />
+              {allStrategyLedgerTradeQuery && <button type="button" className="ledger-search-clear" onClick={() => setAllStrategyLedgerTradeQuery('')}>Clear</button>}
+            </div>
           </div>
           <div className="trade-ledger-scroll all-strategy-ledger-scroll">
             <table className="trade-ledger trade-ledger-body all-strategy-table">
@@ -6560,7 +6653,8 @@ function PerformanceChart({
                 </tr>
               </thead>
               <tbody>
-                {tradeRows.map(row => <tr key={`strategy-${row.id}`} className="chartable-row" onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
+                {allStrategyTradeRows.length === 0 && <tr><td colSpan={12} className="empty">No All Strategy trades matched this selection.</td></tr>}
+                {allStrategyTradeRows.map(row => <tr key={`strategy-${row.id}`} className="chartable-row" onClick={() => setChartTrade(row)} title={row.ledgerSimulationNotes?.join(' | ') || 'Open TradingView chart'}>
                   <td>{row.label}</td>
                   <td><strong>{row.symbol}</strong></td>
                   <td><span className="strategy-cell">{row.strategyName}</span></td>
@@ -6581,7 +6675,7 @@ function PerformanceChart({
         <div className="ledger-pnl-split ledger-pnl-split-wide all-strategy-pnl-split">
           <article><span>All Strategy Open PnL</span><strong className={allStrategyPnlCards.openPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(allStrategyPnlCards.openPnl)}</strong><small>{`${allStrategyPnlCards.openCount} open trades`}</small></article>
           <article><span>All Strategy Closed PnL</span><strong className={allStrategyPnlCards.closedPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(allStrategyPnlCards.closedPnl)}</strong><small>{`${allStrategyPnlCards.closedCount} closed trades`}</small></article>
-          <article><span>All Strategy Net PnL</span><strong className={allStrategyPnlCards.netPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(allStrategyPnlCards.netPnl)}</strong><small>{`${tradeRows.length} generated trades`}</small></article>
+          <article><span>All Strategy Net PnL</span><strong className={allStrategyPnlCards.netPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(allStrategyPnlCards.netPnl)}</strong><small>{`${allStrategyTradeRows.length} generated trades`}</small></article>
           <article><span>All Strategy Spot PnL</span><strong className={allStrategyPnlCards.spotPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(allStrategyPnlCards.spotPnl)}</strong><small>{`${allStrategyPnlCards.spotCount} spot trades`}</small></article>
           <article><span>All Strategy Futures PnL</span><strong className={allStrategyPnlCards.futuresPnl >= 0 ? 'good' : 'bad'}>{formatSignedPct(allStrategyPnlCards.futuresPnl)}</strong><small>{`${allStrategyPnlCards.futuresCount} futures trades`}</small></article>
         </div>
