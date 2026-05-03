@@ -10,6 +10,7 @@
     "server:watch": "tsx watch server/index.ts",
     "start": "node .server-build/index.js",
     "build": "tsc && vite build && tsc -p tsconfig.server.json",
+    "check:health": "node scripts/code-health.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
