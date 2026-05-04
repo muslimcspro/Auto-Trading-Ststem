@@ -7,7 +7,8 @@ import './styles.css';
 type Risk = 'medium' | 'high';
 type Timeframe = '5m' | '10m' | '15m' | '1h' | '2h' | '4h' | '1d';
 type Side = 'LONG' | 'SHORT';
-type ExitMode = 'balanced' | 'quick' | 'extended';
+type ExitMode = 'strategy-defined' | 'balanced' | 'quick' | 'extended';
+type TradeSetupType = 'compression-breakout' | 'liquidity-sweep-reversal' | 'vwap-reclaim' | 'trend-pullback' | 'momentum-ignition';
 type Ticker = { symbol: string; price: number; change24h: number; quoteVolume: number; eventTime: number };
 type SymbolInfo = { symbol: string; baseAsset: string; quoteAsset: string };
 type MarketMode = 'spot' | 'futures';
@@ -34,6 +35,15 @@ type Signal = {
   status: 'OPEN' | 'WIN' | 'LOSS';
   confidence: number;
   reason: string;
+  setupType?: TradeSetupType;
+  setupScore?: number;
+  volumeScore?: number;
+  structureScore?: number;
+  entryZoneLow?: number;
+  entryZoneHigh?: number;
+  stopLossReason?: string;
+  takeProfitReason?: string;
+  invalidationReason?: string;
   executionMode?: 'test' | 'live';
   executionVenueLabel?: string;
   executionLeverage?: number | null;
@@ -98,6 +108,8 @@ type LedgerSimulationSettings = {
   minNotionalUsdt: number;
   spotMinNotionalUsdt: number;
   futuresMinNotionalUsdt: number;
+  spotMinQuoteVolumeUsdt: number;
+  futuresMinQuoteVolumeUsdt: number;
   allocationMethod: 'equal' | 'available';
   riskPerTradePct: number;
   spotFeePct: number;
@@ -135,6 +147,8 @@ const defaultLedgerSimulationSettings: LedgerSimulationSettings = {
   minNotionalUsdt: 5,
   spotMinNotionalUsdt: 5,
   futuresMinNotionalUsdt: 5,
+  spotMinQuoteVolumeUsdt: 1000000,
+  futuresMinQuoteVolumeUsdt: 5000000,
   allocationMethod: 'equal',
   riskPerTradePct: 2,
   spotFeePct: 0.2,
@@ -551,7 +565,10 @@ const formatMinutes = (minutes: number) => {
 
 const averageMinutes = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 
-const formatExitModeLabel = (mode: ExitMode) => mode === 'quick' ? 'Quick' : mode === 'extended' ? 'Extended' : 'Balanced';
+const activeExitModeOptions: ('all' | ExitMode)[] = ['all', 'strategy-defined'];
+
+const formatExitModeLabel = (mode: ExitMode) =>
+  mode === 'strategy-defined' ? 'Strategy Plan' : mode === 'quick' ? 'Quick' : mode === 'extended' ? 'Extended' : 'Balanced';
 
 const formatTargetRiskRatio = (signal: Pick<Signal, 'expectedProfitPct' | 'riskPct'>) =>
   `${signal.expectedProfitPct >= 0 ? '+' : ''}${signal.expectedProfitPct.toFixed(2)}% / -${Math.abs(signal.riskPct).toFixed(2)}%`;
@@ -680,7 +697,7 @@ function App() {
   });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [timeframes, setTimeframes] = useState<Set<Timeframe>>(new Set(['5m', '10m', '15m']));
-  const [exitModes, setExitModes] = useState<Set<ExitMode>>(new Set(['balanced']));
+  const [exitModes, setExitModes] = useState<Set<ExitMode>>(new Set(['strategy-defined']));
   const [strategyMarketScope, setStrategyMarketScope] = useState<StrategyMarketScope>('all');
   const [signals, setSignals] = useState<Signal[]>([]);
   const [executionSignals, setExecutionSignals] = useState<Signal[]>([]);
@@ -754,7 +771,7 @@ function App() {
       setStrategies(st.strategies);
       setSelected(new Set(st.selected));
       setTimeframes(new Set(st.timeframes?.length ? st.timeframes : defaultSelectedTimeframes));
-      setExitModes(new Set(st.exitModes?.length ? st.exitModes : ['balanced']));
+      setExitModes(new Set(st.exitModes?.length ? st.exitModes : ['strategy-defined']));
       setStrategyMarketScope(st.marketScope);
       setSignals(sig.signals);
       setExecutionSignals(execSig.signals);
@@ -928,14 +945,15 @@ function App() {
 
   const saveSelection = async (nextSelected = selected, nextTimeframes = timeframes, nextExitModes = exitModes, nextMarketScope = strategyMarketScope) => {
     const safeTimeframes = nextTimeframes.size > 0 ? nextTimeframes : new Set(defaultSelectedTimeframes);
+    const safeExitModes = nextExitModes.size > 0 ? nextExitModes : new Set<ExitMode>(['strategy-defined']);
     setSelected(new Set(nextSelected));
     setTimeframes(new Set(safeTimeframes));
-    setExitModes(new Set(nextExitModes));
+    setExitModes(new Set(safeExitModes));
     setStrategyMarketScope(nextMarketScope);
     await api('/api/strategies/select', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ strategyIds: [...nextSelected], timeframes: [...safeTimeframes], exitModes: [...nextExitModes], marketScope: nextMarketScope })
+      body: JSON.stringify({ strategyIds: [...nextSelected], timeframes: [...safeTimeframes], exitModes: [...safeExitModes], marketScope: nextMarketScope })
     });
   };
 
@@ -3201,7 +3219,7 @@ function AutoTradePage({
   };
   const cyclePortfolioModeFilter = () => {
     setPortfolioTradesExecutionProfileFilter(prev => {
-      const options: ('all' | ExitMode)[] = ['all', 'quick', 'balanced', 'extended'];
+      const options = activeExitModeOptions;
       const index = options.indexOf(prev);
       return options[(index + 1) % options.length] ?? 'all';
     });
@@ -5465,7 +5483,7 @@ function SignalFilterBar({
       </div>}
       {executionProfileFilter && setExecutionProfileFilter && <div>
         <span>Mode</span>
-        {(['all', 'quick', 'balanced', 'extended'] as ('all' | ExitMode)[]).map(option => <button key={option} className={executionProfileFilter === option ? 'active' : ''} onClick={() => setExecutionProfileFilter(option)}>
+        {activeExitModeOptions.map(option => <button key={option} className={executionProfileFilter === option ? 'active' : ''} onClick={() => setExecutionProfileFilter(option)}>
           {option === 'all' ? 'All Modes' : formatExitModeLabel(option)}
         </button>)}
       </div>}
@@ -6162,9 +6180,9 @@ function PerformanceChart({
     spotCount: metricRows.filter(row => row.market === 'spot').length,
     futuresCount: metricRows.filter(row => row.market === 'futures').length
   }), [metricRows]);
-  const metricPnlCards = useMemo(() => summarizeTradeRowPnl(metricRows), [metricRows]);
-  const acceptedLedgerPnlCards = useMemo(() => summarizeTradeRowPnl(acceptedTradeRows), [acceptedTradeRows]);
-  const allStrategyPnlCards = useMemo(() => summarizeTradeRowPnl(allStrategyTradeRows), [allStrategyTradeRows]);
+  const metricPnlCards = useMemo(() => summarizeTradeRowPnl(metricRows, ledgerSimulationDraft, ledgerMetricScope === 'accepted' ? 'capital' : 'average'), [metricRows, ledgerSimulationDraft, ledgerMetricScope]);
+  const acceptedLedgerPnlCards = useMemo(() => summarizeTradeRowPnl(acceptedTradeRows, ledgerSimulationDraft, 'capital'), [acceptedTradeRows, ledgerSimulationDraft]);
+  const allStrategyPnlCards = useMemo(() => summarizeTradeRowPnl(allStrategyTradeRows, ledgerSimulationDraft, 'average'), [allStrategyTradeRows, ledgerSimulationDraft]);
   const ledgerMetricScopeLabel = ledgerMetricScope === 'accepted' ? 'Accepted Simulation' : 'All Strategies';
   const performanceRows = useMemo(() => performanceSignals.map(signal => {
     const marketPrice = tickers.get(signal.symbol)?.price;
@@ -6281,7 +6299,7 @@ function PerformanceChart({
   const cycleLedgerModeFilter = () => {
     setFocusedTradeId(null);
     setLedgerExecutionProfileFilter(prev => {
-      const options: ('all' | ExitMode)[] = ['all', 'quick', 'balanced', 'extended'];
+      const options = activeExitModeOptions;
       const index = options.indexOf(prev);
       return options[(index + 1) % options.length] ?? 'all';
     });
@@ -6493,6 +6511,7 @@ function PerformanceChart({
               <label><span>Reserve %</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.spotReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotReserveRatio: Number(event.target.value) })} /></label>
               <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.spotMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMaxOpenTrades: Number(event.target.value) })} /></label>
               <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.spotMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMinNotionalUsdt: Number(event.target.value) })} /></label>
+              <label><span>Min 24h Vol</span><input type="number" min={0} step={100000} value={ledgerSimulationDraft.spotMinQuoteVolumeUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, spotMinQuoteVolumeUsdt: Number(event.target.value) })} /></label>
             </div>
           </section>
           <section className="ledger-wallet-panel ledger-wallet-futures">
@@ -6502,6 +6521,7 @@ function PerformanceChart({
               <label><span>Reserve %</span><input type="number" min={0} max={95} step={1} value={ledgerSimulationDraft.futuresReserveRatio} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresReserveRatio: Number(event.target.value) })} /></label>
               <label><span>Max Open</span><input type="number" min={1} max={200} step={1} value={ledgerSimulationDraft.futuresMaxOpenTrades} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMaxOpenTrades: Number(event.target.value) })} /></label>
               <label><span>Min Order</span><input type="number" min={1} step={1} value={ledgerSimulationDraft.futuresMinNotionalUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMinNotionalUsdt: Number(event.target.value) })} /></label>
+              <label><span>Min 24h Vol</span><input type="number" min={0} step={100000} value={ledgerSimulationDraft.futuresMinQuoteVolumeUsdt} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresMinQuoteVolumeUsdt: Number(event.target.value) })} /></label>
               <label><span>Leverage</span><input type="number" min={1} max={20} step={1} value={ledgerSimulationDraft.futuresLeverage} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, futuresLeverage: Number(event.target.value) })} /></label>
               <label><span>Direction</span><select value={ledgerSimulationDraft.allowedDirection} onChange={event => setLedgerSimulationDraft({ ...ledgerSimulationDraft, allowedDirection: event.target.value as LedgerSimulationSettings['allowedDirection'] })}><option value="both">Both</option><option value="long-only">Long only</option><option value="short-only">Short only</option></select></label>
             </div>
@@ -6933,11 +6953,22 @@ type SignalTradeRow = Signal & {
 };
 
 function getTradeRowPnlUsdt(row: SignalTradeRow) {
+  if (typeof row.pnlUsdt === 'number' && Number.isFinite(row.pnlUsdt)) return row.pnlUsdt;
   const notional = Math.max(0, row.ledgerNotionalUsdt ?? row.ledgerAllocationUsdt ?? row.allocationAmount ?? 0);
-  return (notional * row.pnl) / 100;
+  const grossPnl = (notional * row.pnl) / 100;
+  const estimatedCosts = Math.max(0, (row.ledgerEstimatedFeeUsdt ?? 0) + (row.ledgerEstimatedSlippageUsdt ?? 0));
+  return grossPnl - estimatedCosts;
 }
 
-function summarizeTradeRowPnl(rows: SignalTradeRow[]) {
+function pctOfCapital(value: number, capital: number) {
+  return capital > 0 ? (value / capital) * 100 : 0;
+}
+
+function averagePct(total: number, count: number) {
+  return count > 0 ? total / count : 0;
+}
+
+function summarizeTradeRowPnl(rows: SignalTradeRow[], settings?: LedgerSimulationSettings | null, mode: 'capital' | 'average' = 'capital') {
   const summary = {
     openPnl: 0,
     openUsdt: 0,
@@ -6954,29 +6985,52 @@ function summarizeTradeRowPnl(rows: SignalTradeRow[]) {
     futuresUsdt: 0,
     futuresCount: 0
   };
+  const raw = {
+    openPnl: 0,
+    closedPnl: 0,
+    netPnl: 0,
+    spotPnl: 0,
+    futuresPnl: 0
+  };
   for (const row of rows) {
     const pnlUsdt = getTradeRowPnlUsdt(row);
+    raw.netPnl += row.pnl;
     if (row.status === 'OPEN') {
-      summary.openPnl += row.pnl;
+      raw.openPnl += row.pnl;
       summary.openUsdt += pnlUsdt;
       summary.openCount += 1;
     } else {
-      summary.closedPnl += row.pnl;
+      raw.closedPnl += row.pnl;
       summary.closedUsdt += pnlUsdt;
       summary.closedCount += 1;
     }
-    summary.netPnl += row.pnl;
     summary.netUsdt += pnlUsdt;
     if ((row.market ?? 'spot') === 'futures') {
-      summary.futuresPnl += row.pnl;
+      raw.futuresPnl += row.pnl;
       summary.futuresUsdt += pnlUsdt;
       summary.futuresCount += 1;
     } else {
-      summary.spotPnl += row.pnl;
+      raw.spotPnl += row.pnl;
       summary.spotUsdt += pnlUsdt;
       summary.spotCount += 1;
     }
   }
+  const totalCapital = Math.max(0, settings?.startingCapitalUsdt ?? ((settings?.spotCapitalUsdt ?? 0) + (settings?.futuresCapitalUsdt ?? 0)));
+  const spotCapital = Math.max(0, settings?.spotCapitalUsdt ?? 0);
+  const futuresCapital = Math.max(0, settings?.futuresCapitalUsdt ?? 0);
+  if (mode === 'average' || totalCapital <= 0) {
+    summary.openPnl = averagePct(raw.openPnl, summary.openCount);
+    summary.closedPnl = averagePct(raw.closedPnl, summary.closedCount);
+    summary.netPnl = averagePct(raw.netPnl, rows.length);
+    summary.spotPnl = averagePct(raw.spotPnl, summary.spotCount);
+    summary.futuresPnl = averagePct(raw.futuresPnl, summary.futuresCount);
+    return summary;
+  }
+  summary.openPnl = pctOfCapital(summary.openUsdt, totalCapital);
+  summary.closedPnl = pctOfCapital(summary.closedUsdt, totalCapital);
+  summary.netPnl = pctOfCapital(summary.netUsdt, totalCapital);
+  summary.spotPnl = pctOfCapital(summary.spotUsdt, spotCapital || totalCapital);
+  summary.futuresPnl = pctOfCapital(summary.futuresUsdt, futuresCapital || totalCapital);
   return summary;
 }
 
