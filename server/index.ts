@@ -14,6 +14,8 @@ type ExitMode = 'balanced' | 'quick' | 'extended';
 type TradingVenue = 'spot' | 'futures';
 type ExecutionVenue = TradingVenue | 'both';
 type StrategyMarketScope = 'spot' | 'futures' | 'all';
+type StrategyFamily = 'trend' | 'pullback' | 'breakout' | 'reversal';
+type MarketRegime = 'bull' | 'bear' | 'range' | 'unclear';
 
 type SymbolInfo = {
   symbol: string;
@@ -69,6 +71,12 @@ type TradeSignal = SignalDraft & {
   market: TradingVenue;
   strategyId: string;
   strategyName: string;
+  strategyFamily?: StrategyFamily;
+  marketRegime?: MarketRegime;
+  marketRegimeConfidence?: number;
+  entryQualityScore?: number;
+  entryQualityNotes?: string[];
+  entryQualityRejectNotes?: string[];
   symbol: string;
   timeframe: Timeframe;
   exitMode: ExitMode;
@@ -206,6 +214,36 @@ type StrategyStats = {
   lossShort: number;
   openLong: number;
   openShort: number;
+};
+
+type MarketRegimeSnapshot = {
+  market: TradingVenue;
+  regime: MarketRegime;
+  confidence: number;
+  upVotes: number;
+  downVotes: number;
+  rangeVotes: number;
+  checkedAt: number;
+};
+
+type EntryQualityReview = {
+  strategyFamily: StrategyFamily;
+  marketRegime: MarketRegime;
+  marketRegimeConfidence: number;
+  score: number;
+  notes: string[];
+  rejectNotes: string[];
+};
+
+type TrendProfile = {
+  direction: -1 | 0 | 1;
+  adxValue: number;
+  closePositionValue: number;
+  extensionPct: number;
+  volumeRatioValue: number;
+  bodyRatio: number;
+  rsiValue: number;
+  rangeLike: boolean;
 };
 
 type TelegramAccountSubscription = {
@@ -997,6 +1035,7 @@ let dashboardCache: {
   exchange: string;
 } | null = null;
 let dashboardCacheDirty = true;
+const marketRegimeCache = new Map<TradingVenue, { checkedAt: number; snapshot: MarketRegimeSnapshot }>();
 let homeFearGreedCache: { createdAt: number; payload: HomeFearGreed } | null = null;
 let homeMarketCapCache: { createdAt: number; payload: HomeMarketCapRow[] } | null = null;
 let homeNewsCache: { createdAt: number; payload: HomeNewsRow[] } | null = null;
@@ -1963,6 +2002,15 @@ function applyLedgerSimulationToSignal(signal: TradeSignal, sourceSignals = sign
     && countsInLedgerSimulation(item)
     && signalActiveAt(item, atTime)
   );
+  const activeAccepted = sourceSignals.filter(item =>
+    item.id !== signal.id
+    && countsInLedgerSimulation(item)
+    && signalActiveAt(item, atTime)
+  );
+  const signalBaseAsset = baseAssetFromSymbol(signal.symbol);
+  const sameDirectionOpen = activeAccepted.filter(item => item.side === signal.side).length;
+  const sameMarketDirectionOpen = activeAccepted.filter(item => item.market === signal.market && item.side === signal.side).length;
+  const sameBaseAssetOpen = activeAccepted.filter(item => baseAssetFromSymbol(item.symbol) === signalBaseAsset).length;
 
   signal.ledgerStrategyLedgerEligible = duplicateOpen ? false : true;
   signal.ledgerStartingCapitalUsdt = ledgerSimulationSettings.spotCapitalUsdt + ledgerSimulationSettings.futuresCapitalUsdt;
@@ -1977,7 +2025,14 @@ function applyLedgerSimulationToSignal(signal: TradeSignal, sourceSignals = sign
   if (signal.market === 'spot' && signal.side === 'SHORT') notes.push('Spot short not supported');
   if (signal.market === 'futures' && ledgerSimulationSettings.allowedDirection === 'long-only' && signal.side === 'SHORT') notes.push('Direction not allowed');
   if (signal.market === 'futures' && ledgerSimulationSettings.allowedDirection === 'short-only' && signal.side === 'LONG') notes.push('Direction not allowed');
+  for (const note of signal.entryQualityRejectNotes ?? []) notes.push(note);
+  if (typeof signal.entryQualityScore === 'number' && signal.entryQualityScore < ENTRY_QUALITY_ACCEPT_SCORE) {
+    notes.push(`Quality score ${signal.entryQualityScore} below ${ENTRY_QUALITY_ACCEPT_SCORE}`);
+  }
   if (duplicateOpen) notes.push('Duplicate symbol open');
+  if (sameDirectionOpen >= ledgerSimulationSettings.maxSameDirectionOpen) notes.push('Same direction exposure limit');
+  if (sameMarketDirectionOpen >= ledgerSimulationSettings.maxSameMarketDirectionOpen) notes.push('Same market direction exposure limit');
+  if (sameBaseAssetOpen >= ledgerSimulationSettings.maxSameBaseAssetOpen) notes.push('Same base asset exposure limit');
   if (snapshot.open.length >= venueMaxOpen) notes.push(`${signal.market === 'spot' ? 'Spot' : 'Futures'} max open reached`);
   if (snapshot.availableCapital <= 0) notes.push('No available capital');
   if (rulesLoaded && !rules) notes.push('Symbol not tradable');
@@ -2015,7 +2070,11 @@ function applyLedgerSimulationToSignal(signal: TradeSignal, sourceSignals = sign
   }
 
   signal.ledgerSimulationStatus = 'accepted';
-  signal.ledgerSimulationNotes = ['Accepted by ledger simulation.'];
+  signal.ledgerSimulationNotes = [
+    typeof signal.entryQualityScore === 'number'
+      ? `Accepted by ledger simulation with quality score ${signal.entryQualityScore}.`
+      : 'Accepted by ledger simulation.'
+  ];
   signal.ledgerPnlEligible = true;
   return signal;
 }
@@ -2494,14 +2553,33 @@ async function monitorLiveFuturesProtection() {
     for (const { signal, position, metrics } of active) {
       const price = metrics.marketPrice ?? 0;
       const hitStop = signal.side === 'LONG' ? price <= signal.stopLoss : price >= signal.stopLoss;
-      if (hitStop) {
-        await closeFuturesPosition(signal, position, 'Stop Loss');
-        continue;
-      }
-
       const hitTarget = signal.side === 'LONG' ? price >= signal.takeProfit : price <= signal.takeProfit;
       if (hitTarget) {
         await closeFuturesPosition(signal, position, 'Take Profit');
+        continue;
+      }
+
+      const currentPnl = signalOpenPnlPct(signal, price);
+      signal.maxFavorablePnlPct = Math.max(signal.maxFavorablePnlPct ?? 0, currentPnl);
+      signal.profitLockPct = Math.max(signal.profitLockPct ?? 0, profitLockFromPeak(signal));
+      const risk = Math.max(signal.riskPct, 0.0001);
+      const peakR = Math.max(0, (signal.maxFavorablePnlPct ?? 0) / risk);
+      const breakEvenPrice = breakEvenStopPrice(signal, signal.entry);
+      const hitBreakEven = liveExecutionRules.breakEvenEnabled
+        && peakR >= dynamicBreakEvenTriggerR(signal)
+        && (signal.side === 'LONG' ? price <= breakEvenPrice : price >= breakEvenPrice);
+      if (hitBreakEven) {
+        await closeFuturesPosition(signal, position, 'Breakeven Protection');
+        continue;
+      }
+      const lockedPnl = signal.profitLockPct ?? 0;
+      const hitTrailingLock = liveExecutionRules.trailingStopEnabled && lockedPnl > 0 && currentPnl <= lockedPnl;
+      if (hitTrailingLock) {
+        await closeFuturesPosition(signal, position, 'Trailing Profit Lock');
+        continue;
+      }
+      if (hitStop) {
+        await closeFuturesPosition(signal, position, 'Stop Loss');
         continue;
       }
     }
@@ -2564,6 +2642,10 @@ async function evaluateExecutionCandidate(signal: TradeSignal) {
   if (rules.ruleToggles.openTradeLimit && !unlimitedOpenTrades && openSignals.length >= rules.maxTrades) failedRules.push('Open Trade Limit');
   const rewardMultiple = signal.riskPct > 0 ? signal.expectedProfitPct / signal.riskPct : Infinity;
   if (rules.ruleToggles.minRiskReward && rewardMultiple < getRiskRewardMultiplier(rules.minRiskReward, rules.customRiskReward)) failedRules.push('Minimum Risk/Reward');
+  for (const note of signal.entryQualityRejectNotes ?? []) failedRules.push(note);
+  if (typeof signal.entryQualityScore === 'number' && signal.entryQualityScore < ENTRY_QUALITY_ACCEPT_SCORE) {
+    failedRules.push(`Quality score ${signal.entryQualityScore} below ${ENTRY_QUALITY_ACCEPT_SCORE}`);
+  }
   if (!symbolRules || symbolRules.status !== 'TRADING') {
     failedRules.push(signal.market === 'spot' ? 'Spot symbol is not tradable on Binance.' : 'Futures symbol is not tradable on Binance.');
   }
@@ -3196,6 +3278,12 @@ function refreshPendingExecutionRecordFromDashboardSignal(executionSignal: Trade
     confidence: executionSignal.confidence,
     rr: executionSignal.rr,
     reason: executionSignal.reason,
+    strategyFamily: executionSignal.strategyFamily,
+    marketRegime: executionSignal.marketRegime,
+    marketRegimeConfidence: executionSignal.marketRegimeConfidence,
+    entryQualityScore: executionSignal.entryQualityScore,
+    entryQualityNotes: executionSignal.entryQualityNotes,
+    entryQualityRejectNotes: executionSignal.entryQualityRejectNotes,
     plannedExitAt: executionSignal.plannedExitAt
   });
   executionSignal.market = sourceSignal.market;
@@ -3213,6 +3301,12 @@ function refreshPendingExecutionRecordFromDashboardSignal(executionSignal: Trade
   executionSignal.confidence = sourceSignal.confidence;
   executionSignal.rr = sourceSignal.rr;
   executionSignal.reason = sourceSignal.reason;
+  executionSignal.strategyFamily = sourceSignal.strategyFamily;
+  executionSignal.marketRegime = sourceSignal.marketRegime;
+  executionSignal.marketRegimeConfidence = sourceSignal.marketRegimeConfidence;
+  executionSignal.entryQualityScore = sourceSignal.entryQualityScore;
+  executionSignal.entryQualityNotes = sourceSignal.entryQualityNotes;
+  executionSignal.entryQualityRejectNotes = sourceSignal.entryQualityRejectNotes;
   executionSignal.openedAt = sourceSignal.openedAt;
   executionSignal.plannedExitAt = sourceSignal.plannedExitAt;
   executionSignal.sourceSignalId = sourceSignal.id;
@@ -3236,6 +3330,12 @@ function refreshPendingExecutionRecordFromDashboardSignal(executionSignal: Trade
     confidence: executionSignal.confidence,
     rr: executionSignal.rr,
     reason: executionSignal.reason,
+    strategyFamily: executionSignal.strategyFamily,
+    marketRegime: executionSignal.marketRegime,
+    marketRegimeConfidence: executionSignal.marketRegimeConfidence,
+    entryQualityScore: executionSignal.entryQualityScore,
+    entryQualityNotes: executionSignal.entryQualityNotes,
+    entryQualityRejectNotes: executionSignal.entryQualityRejectNotes,
     plannedExitAt: executionSignal.plannedExitAt
   });
   return previous !== next;
@@ -3487,6 +3587,10 @@ const STRATEGY_PAUSE_RULE = {
   lossStreak: 2,
   cooldownMs: 4 * 60 * 60_000
 };
+
+const ENTRY_QUALITY_ACCEPT_SCORE = 76;
+const ENTRY_QUALITY_HARD_FLOOR = 68;
+const MARKET_REGIME_CACHE_MS = 3 * 60_000;
 
 let spotLongMarketGateCache: { checkedAt: number; allowed: boolean } | null = null;
 const directionalMarketGateCache = new Map<string, { checkedAt: number; allowed: boolean }>();
@@ -3838,9 +3942,9 @@ const strategies: Strategy[] = [
     const ema21 = ema(closes, 21);
     const ema50 = ema(closes, 50);
     const trend = last.close > ema21 && ema21 > ema50;
-    const heldSupport = last.low <= ema21 * 1.004 && last.close > ema21 && candleBodyRatio(last) > 0.42;
-    if (trend && heldSupport && rsi(closes) >= 48 && t.quoteVolume > 350000) {
-      return { side: 'LONG', confidence: 70, rr: 2.0, reason: 'Spot trend pullback held EMA21 support' };
+    const heldSupport = last.low <= ema21 * 1.0035 && last.close > ema21 && candleBodyRatio(last) > 0.48;
+    if (trend && heldSupport && rsi(closes) >= 52 && volumeRatio(c) >= 1.12 && t.quoteVolume > 750000 && t.change24h > 0) {
+      return { side: 'LONG', confidence: 74, rr: 2.2, reason: 'Spot trend pullback held EMA21 support with volume confirmation' };
     }
     return null;
   }},
@@ -3849,8 +3953,8 @@ const strategies: Strategy[] = [
     const previous = c.at(-2)!;
     const resistance = Math.max(...c.slice(-34, -2).map(x => x.high));
     const retested = previous.close > resistance && last.low <= resistance * 1.003 && last.close > resistance;
-    if (retested && volumeRatio(c) >= 1.18 && closePosition(c) >= 0.58) {
-      return { side: 'LONG', confidence: 71, rr: 2.2, reason: 'Spot breakout retest confirmed above former resistance' };
+    if (retested && volumeRatio(c) >= 1.35 && closePosition(c) >= 0.66 && candleBodyRatio(last) >= 0.46) {
+      return { side: 'LONG', confidence: 76, rr: 2.4, reason: 'Spot breakout retest confirmed above former resistance with strong demand' };
     }
     return null;
   }},
@@ -3859,8 +3963,8 @@ const strategies: Strategy[] = [
     const previous = c.at(-2)!;
     const vwap = rollingVwap(c, 48);
     const reclaim = previous.close < vwap && last.close > vwap && last.close > last.open;
-    if (reclaim && rsi(c.map(x => x.close)) >= 50 && volumeRatio(c) >= 1.12 && t.change24h > -1) {
-      return { side: 'LONG', confidence: 68, rr: 1.9, reason: 'Spot VWAP reclaim with constructive momentum' };
+    if (reclaim && rsi(c.map(x => x.close)) >= 53 && volumeRatio(c) >= 1.25 && t.change24h > 0) {
+      return { side: 'LONG', confidence: 73, rr: 2.1, reason: 'Spot VWAP reclaim with constructive momentum and positive tape' };
     }
     return null;
   }},
@@ -3868,8 +3972,8 @@ const strategies: Strategy[] = [
     const last = c.at(-1)!;
     const priorLow = Math.min(...c.slice(-28, -1).map(x => x.low));
     const swept = last.low < priorLow && last.close > priorLow && last.close > last.open;
-    if (swept && candleBodyRatio(last) >= 0.48 && volumeRatio(c) >= 1.15) {
-      return { side: 'LONG', confidence: 69, rr: 2.1, reason: 'Spot liquidity sweep recovered above local lows' };
+    if (swept && candleBodyRatio(last) >= 0.56 && volumeRatio(c) >= 1.35 && closePosition(c, 18) >= 0.62) {
+      return { side: 'LONG', confidence: 74, rr: 2.4, reason: 'Spot liquidity sweep recovered above local lows with reversal confirmation' };
     }
     return null;
   }},
@@ -3879,11 +3983,11 @@ const strategies: Strategy[] = [
     const direction = trendDirection(c);
     const trendAdx = adx(c);
     const vol = volumeRatio(c);
-    if (direction > 0 && trendAdx >= 18 && vol >= 1.05 && rsi(closes) >= 52 && t.change24h > -0.5) {
-      return { side: 'LONG', confidence: 73, rr: 2.5, reason: 'Futures trend continuation long with EMA stack and volume' };
+    if (direction > 0 && trendAdx >= 22 && vol >= 1.18 && rsi(closes) >= 55 && t.change24h > 0 && candleBodyRatio(last) >= 0.42) {
+      return { side: 'LONG', confidence: 77, rr: 2.7, reason: 'Futures trend continuation long with EMA stack, ADX, and volume' };
     }
-    if (direction < 0 && trendAdx >= 18 && vol >= 1.05 && rsi(closes) <= 48 && t.change24h < 0.5) {
-      return { side: 'SHORT', confidence: 73, rr: 2.5, reason: 'Futures trend continuation short with EMA stack and volume' };
+    if (direction < 0 && trendAdx >= 22 && vol >= 1.18 && rsi(closes) <= 45 && t.change24h < 0 && candleBodyRatio(last) >= 0.42) {
+      return { side: 'SHORT', confidence: 77, rr: 2.7, reason: 'Futures trend continuation short with EMA stack, ADX, and volume' };
     }
     if (last.close) return null;
     return null;
@@ -3894,11 +3998,11 @@ const strategies: Strategy[] = [
     const body = candleBodyRatio(last);
     const vol = volumeRatio(c);
     const movePct = ((last.close - prev.close) / Math.max(prev.close, 0.00000001)) * 100;
-    if (body >= 0.62 && vol >= 1.45 && movePct >= 0.45 && closePosition(c, 18) >= 0.72) {
-      return { side: 'LONG', confidence: 76, rr: 2.7, reason: 'Futures bullish momentum burst with volume expansion' };
+    if (body >= 0.68 && vol >= 1.65 && movePct >= 0.65 && closePosition(c, 18) >= 0.75) {
+      return { side: 'LONG', confidence: 80, rr: 3.0, reason: 'Futures bullish momentum burst with volume expansion' };
     }
-    if (body >= 0.62 && vol >= 1.45 && movePct <= -0.45 && closePosition(c, 18) <= 0.28) {
-      return { side: 'SHORT', confidence: 76, rr: 2.7, reason: 'Futures bearish momentum burst with volume expansion' };
+    if (body >= 0.68 && vol >= 1.65 && movePct <= -0.65 && closePosition(c, 18) <= 0.25) {
+      return { side: 'SHORT', confidence: 80, rr: 3.0, reason: 'Futures bearish momentum burst with volume expansion' };
     }
     return null;
   }},
@@ -3906,11 +4010,12 @@ const strategies: Strategy[] = [
     const last = c.at(-1)!;
     const prev = c.at(-2)!;
     const vwap = rollingVwap(c, 60);
-    if (prev.close < vwap && last.close > vwap && last.close > last.open && volumeRatio(c) >= 1.12) {
-      return { side: 'LONG', confidence: 72, rr: 2.4, reason: 'Futures VWAP reclaim confirmed' };
+    const closes = c.map(x => x.close);
+    if (prev.close < vwap && last.close > vwap && last.close > last.open && volumeRatio(c) >= 1.25 && rsi(closes) >= 53) {
+      return { side: 'LONG', confidence: 76, rr: 2.6, reason: 'Futures VWAP reclaim confirmed with momentum' };
     }
-    if (prev.close > vwap && last.close < vwap && last.close < last.open && volumeRatio(c) >= 1.12) {
-      return { side: 'SHORT', confidence: 72, rr: 2.4, reason: 'Futures VWAP rejection confirmed' };
+    if (prev.close > vwap && last.close < vwap && last.close < last.open && volumeRatio(c) >= 1.25 && rsi(closes) <= 47) {
+      return { side: 'SHORT', confidence: 76, rr: 2.6, reason: 'Futures VWAP rejection confirmed with momentum' };
     }
     return null;
   }},
@@ -3918,11 +4023,11 @@ const strategies: Strategy[] = [
     const last = c.at(-1)!;
     const rangeHigh = Math.max(...c.slice(-32, -1).map(x => x.high));
     const rangeLow = Math.min(...c.slice(-32, -1).map(x => x.low));
-    if (last.high > rangeHigh && last.close < rangeHigh && candleBodyRatio(last) >= 0.45 && volumeRatio(c) >= 1.2) {
-      return { side: 'SHORT', confidence: 74, rr: 2.6, reason: 'Futures failed breakout reversed below range high' };
+    if (last.high > rangeHigh && last.close < rangeHigh && candleBodyRatio(last) >= 0.56 && volumeRatio(c) >= 1.35 && closePosition(c, 18) <= 0.38) {
+      return { side: 'SHORT', confidence: 78, rr: 2.8, reason: 'Futures failed breakout reversed below range high with rejection close' };
     }
-    if (last.low < rangeLow && last.close > rangeLow && candleBodyRatio(last) >= 0.45 && volumeRatio(c) >= 1.2) {
-      return { side: 'LONG', confidence: 74, rr: 2.6, reason: 'Futures failed breakdown reclaimed range low' };
+    if (last.low < rangeLow && last.close > rangeLow && candleBodyRatio(last) >= 0.56 && volumeRatio(c) >= 1.35 && closePosition(c, 18) >= 0.62) {
+      return { side: 'LONG', confidence: 78, rr: 2.8, reason: 'Futures failed breakdown reclaimed range low with rejection close' };
     }
     return null;
   }},
@@ -3930,9 +4035,9 @@ const strategies: Strategy[] = [
     const ranges = c.slice(-12, -1).map(x => (x.high - x.low) / Math.max(x.close, 0.00000001));
     const compressed = ranges.length > 0 && ranges.every(value => value < 0.0075);
     const last = c.at(-1)!;
-    if (!compressed || volumeRatio(c) < 1.35 || candleBodyRatio(last) < 0.55) return null;
-    if (last.close > last.open && closePosition(c, 18) > 0.7) return { side: 'LONG', confidence: 75, rr: 2.8, reason: 'Futures compression released upward' };
-    if (last.close < last.open && closePosition(c, 18) < 0.3) return { side: 'SHORT', confidence: 75, rr: 2.8, reason: 'Futures compression released downward' };
+    if (!compressed || volumeRatio(c) < 1.55 || candleBodyRatio(last) < 0.62) return null;
+    if (last.close > last.open && closePosition(c, 18) > 0.75) return { side: 'LONG', confidence: 80, rr: 3.0, reason: 'Futures compression released upward with expansion candle' };
+    if (last.close < last.open && closePosition(c, 18) < 0.25) return { side: 'SHORT', confidence: 80, rr: 3.0, reason: 'Futures compression released downward with expansion candle' };
     return null;
   }}
 ];
@@ -5482,6 +5587,7 @@ function buildSignal(strategy: Strategy, draft: SignalDraft, ticker: PriceTicker
     market,
     strategyId: strategy.id,
     strategyName: strategy.name,
+    strategyFamily: getStrategyFamily(strategy.id),
     symbol: ticker.symbol,
     timeframe,
     exitMode,
@@ -5505,6 +5611,237 @@ function higherTimeframeFor(timeframe: Timeframe): Timeframe | null {
   if (timeframe === '2h') return '4h';
   if (timeframe === '4h') return '1d';
   return null;
+}
+
+function getStrategyFamily(strategyId: string): StrategyFamily {
+  if (strategyId.includes('failed') || strategyId.includes('liquidity')) return 'reversal';
+  if (strategyId.includes('breakout') || strategyId.includes('compression') || strategyId.includes('momentum')) return 'breakout';
+  if (strategyId.includes('pullback') || strategyId.includes('vwap')) return 'pullback';
+  return 'trend';
+}
+
+function sideToDirection(side: Side): -1 | 1 {
+  return side === 'LONG' ? 1 : -1;
+}
+
+function sideMatchesTrend(side: Side, direction: -1 | 0 | 1) {
+  return direction !== 0 && sideToDirection(side) === direction;
+}
+
+function sideAgainstTrend(side: Side, direction: -1 | 0 | 1) {
+  return direction !== 0 && sideToDirection(side) !== direction;
+}
+
+function regimeAllowsSide(regime: MarketRegime, side: Side) {
+  if (regime === 'bull') return side === 'LONG';
+  if (regime === 'bear') return side === 'SHORT';
+  return true;
+}
+
+function qualityContextTimeframes(timeframe: Timeframe): Timeframe[] {
+  if (timeframe === '5m' || timeframe === '10m') return ['15m', '1h'];
+  if (timeframe === '15m') return ['1h', '4h'];
+  if (timeframe === '1h' || timeframe === '2h') return ['4h'];
+  if (timeframe === '4h') return ['1d'];
+  return [];
+}
+
+function entryExtensionLimitPct(timeframe: Timeframe, family: StrategyFamily) {
+  const base = ({
+    '5m': 0.8,
+    '10m': 1.0,
+    '15m': 1.2,
+    '1h': 2.0,
+    '2h': 2.6,
+    '4h': 4.0,
+    '1d': 7.0
+  } as const)[timeframe];
+  if (family === 'breakout') return base * 1.35;
+  if (family === 'reversal') return base * 1.5;
+  return base;
+}
+
+function trendProfile(candles: Candle[]): TrendProfile {
+  const closes = candles.map(candle => candle.close);
+  const last = candles.at(-1);
+  if (!last || candles.length < 50) {
+    return {
+      direction: 0,
+      adxValue: 0,
+      closePositionValue: 0.5,
+      extensionPct: 0,
+      volumeRatioValue: 1,
+      bodyRatio: 0,
+      rsiValue: 50,
+      rangeLike: true
+    };
+  }
+  const ema21 = ema(closes, 21);
+  const ema50 = ema(closes, 50);
+  const trendAdx = adx(candles);
+  const direction = last.close > ema21 && ema21 > ema50 && trendAdx >= 18
+    ? 1
+    : last.close < ema21 && ema21 < ema50 && trendAdx >= 18
+      ? -1
+      : 0;
+  const position = closePosition(candles, 48);
+  return {
+    direction,
+    adxValue: trendAdx,
+    closePositionValue: position,
+    extensionPct: ema21 > 0 ? Math.abs(last.close - ema21) / last.close * 100 : 0,
+    volumeRatioValue: volumeRatio(candles),
+    bodyRatio: candleBodyRatio(last),
+    rsiValue: rsi(closes),
+    rangeLike: trendAdx < 17 || (direction === 0 && position > 0.32 && position < 0.68)
+  };
+}
+
+function marketRegimeVote(candles: Candle[]) {
+  const profile = trendProfile(candles);
+  if (profile.direction > 0) return { direction: 1 as const, range: false };
+  if (profile.direction < 0) return { direction: -1 as const, range: false };
+  return { direction: 0 as const, range: profile.rangeLike };
+}
+
+async function getMarketRegime(market: TradingVenue): Promise<MarketRegimeSnapshot> {
+  const cached = marketRegimeCache.get(market);
+  if (cached && Date.now() - cached.checkedAt < MARKET_REGIME_CACHE_MS) return cached.snapshot;
+  const [btc1h, btc4h, eth1h, eth4h] = await Promise.all([
+    fetchCandles('BTCUSDT', '1h', market, 80).catch(() => []),
+    fetchCandles('BTCUSDT', '4h', market, 80).catch(() => []),
+    fetchCandles('ETHUSDT', '1h', market, 80).catch(() => []),
+    fetchCandles('ETHUSDT', '4h', market, 80).catch(() => [])
+  ]);
+  const votes = [btc1h, btc4h, eth1h, eth4h].map(marketRegimeVote);
+  const upVotes = votes.filter(vote => vote.direction > 0).length;
+  const downVotes = votes.filter(vote => vote.direction < 0).length;
+  const rangeVotes = votes.filter(vote => vote.range).length;
+  const regime: MarketRegime = upVotes >= 3 && downVotes === 0
+    ? 'bull'
+    : downVotes >= 3 && upVotes === 0
+      ? 'bear'
+      : rangeVotes >= 2 && upVotes < 2 && downVotes < 2
+        ? 'range'
+        : upVotes >= 2 && upVotes > downVotes + 1
+          ? 'bull'
+          : downVotes >= 2 && downVotes > upVotes + 1
+            ? 'bear'
+            : 'unclear';
+  const confidence = regime === 'bull'
+    ? Math.round((upVotes / votes.length) * 100)
+    : regime === 'bear'
+      ? Math.round((downVotes / votes.length) * 100)
+      : regime === 'range'
+        ? Math.round((rangeVotes / votes.length) * 100)
+        : Math.round((Math.max(upVotes, downVotes, rangeVotes) / votes.length) * 100);
+  const snapshot = { market, regime, confidence, upVotes, downVotes, rangeVotes, checkedAt: Date.now() };
+  marketRegimeCache.set(market, { checkedAt: Date.now(), snapshot });
+  return snapshot;
+}
+
+async function reviewEntryQuality(candidate: SignalCandidate): Promise<EntryQualityReview> {
+  const { signal, candles, market, timeframe } = candidate;
+  const strategyFamily = getStrategyFamily(signal.strategyId);
+  const regime = await getMarketRegime(market);
+  const contextTimeframes = qualityContextTimeframes(timeframe);
+  const contextCandles = await Promise.all(
+    contextTimeframes.map(item => fetchCandles(signal.symbol, item, market, 80).catch(() => []))
+  );
+  const local = trendProfile(candles);
+  const contextProfiles = contextCandles.filter(rows => rows.length >= 50).map(trendProfile);
+  const supportCount = contextProfiles.filter(profile => sideMatchesTrend(signal.side, profile.direction)).length;
+  const againstCount = contextProfiles.filter(profile => sideAgainstTrend(signal.side, profile.direction)).length;
+  const rewardMultiple = signal.riskPct > 0 ? signal.expectedProfitPct / signal.riskPct : signal.rr;
+  const notes: string[] = [];
+  const rejectNotes: string[] = [];
+
+  let score = 48;
+  score += clamp((signal.confidence - 65) * 1.35, -8, 18);
+  score += clamp((rewardMultiple - 2) * 6, -8, 10);
+  score += local.volumeRatioValue >= 1.5 ? 9 : local.volumeRatioValue >= 1.25 ? 6 : local.volumeRatioValue >= 1.1 ? 3 : -6;
+  score += local.bodyRatio >= 0.58 ? 6 : local.bodyRatio >= 0.45 ? 3 : -4;
+  score += local.adxValue >= 25 ? 8 : local.adxValue >= 20 ? 4 : local.rangeLike ? 1 : -4;
+  score += supportCount * 7;
+  score -= againstCount * 12;
+
+  if (regime.regime === 'bull' || regime.regime === 'bear') {
+    if (regimeAllowsSide(regime.regime, signal.side)) {
+      score += regime.confidence >= 75 ? 12 : 8;
+      notes.push(`Market regime supports ${signal.side.toLowerCase()}`);
+    } else if (strategyFamily === 'reversal') {
+      score -= 18;
+      rejectNotes.push('Reversal blocked outside range');
+    } else {
+      score -= 24;
+      rejectNotes.push('Against market regime');
+    }
+  } else if (regime.regime === 'range') {
+    if (strategyFamily === 'reversal') {
+      score += 12;
+      notes.push('Range regime supports reversal');
+    } else if (strategyFamily === 'breakout' && local.volumeRatioValue >= 1.45) {
+      score += 4;
+      notes.push('Breakout allowed by range volume expansion');
+    } else {
+      score -= 12;
+      rejectNotes.push('Trend setup blocked in range');
+    }
+  } else {
+    score -= 8;
+    rejectNotes.push('Unclear market regime');
+  }
+
+  if ((strategyFamily === 'trend' || strategyFamily === 'pullback') && !sideMatchesTrend(signal.side, local.direction)) {
+    score -= 10;
+    rejectNotes.push('Weak local trend alignment');
+  }
+  if (contextProfiles.length > 0 && supportCount === 0 && strategyFamily !== 'reversal') {
+    score -= 14;
+    rejectNotes.push('Weak higher timeframe');
+  }
+  if (againstCount > 0 && strategyFamily !== 'reversal') {
+    rejectNotes.push('Higher timeframe conflict');
+  }
+
+  const extensionLimit = entryExtensionLimitPct(timeframe, strategyFamily);
+  if (local.extensionPct > extensionLimit) {
+    score -= Math.min(16, (local.extensionPct - extensionLimit) * 4);
+    rejectNotes.push('Entry too late');
+  }
+
+  if (strategyFamily === 'breakout' && local.volumeRatioValue < 1.3) {
+    score -= 8;
+    rejectNotes.push('Breakout volume too low');
+  }
+  if (strategyFamily === 'reversal' && regime.regime !== 'range' && local.volumeRatioValue < 1.55) {
+    score -= 8;
+    rejectNotes.push('Reversal confirmation too weak');
+  }
+  if (market === 'spot' && signal.side !== 'LONG') {
+    rejectNotes.push('Spot short not supported');
+  }
+
+  score = Math.round(clamp(score, 0, 100));
+  if (score < ENTRY_QUALITY_HARD_FLOOR) rejectNotes.push('Low quality score');
+  return {
+    strategyFamily,
+    marketRegime: regime.regime,
+    marketRegimeConfidence: regime.confidence,
+    score,
+    notes: Array.from(new Set(notes)),
+    rejectNotes: Array.from(new Set(rejectNotes))
+  };
+}
+
+function applyEntryQualityReview(signal: TradeSignal, review: EntryQualityReview) {
+  signal.strategyFamily = review.strategyFamily;
+  signal.marketRegime = review.marketRegime;
+  signal.marketRegimeConfidence = review.marketRegimeConfidence;
+  signal.entryQualityScore = review.score;
+  signal.entryQualityNotes = review.notes;
+  signal.entryQualityRejectNotes = review.rejectNotes;
+  signal.confidence = Math.max(signal.confidence, Math.min(95, Math.round(review.score * 0.9)));
 }
 
 function normalizeReturns(candles: Candle[], size = 18) {
@@ -5604,6 +5941,14 @@ function isStrategyTemporarilyPaused(strategyId: string) {
   return shouldPause;
 }
 
+function isSymbolTemporarilyPaused(symbol: string) {
+  const pauseUntil = symbolPauseUntil.get(symbol);
+  if (!pauseUntil) return false;
+  if (pauseUntil > Date.now()) return true;
+  symbolPauseUntil.delete(symbol);
+  return false;
+}
+
 function isMacroUptrend(candles: Candle[]) {
   if (candles.length < 50) return false;
   const closes = candles.map(candle => candle.close);
@@ -5684,6 +6029,7 @@ async function scanMarket() {
           for (const strategy of active) {
             if (version !== scanVersion || selectedStrategies.size === 0 || !selectedStrategies.has(strategy.id)) return;
             if (isStrategyTemporarilyPaused(strategy.id)) continue;
+            if (isSymbolTemporarilyPaused(ticker.symbol)) continue;
             evaluatedStrategies += 1;
             const draft = strategy.evaluate(candles, ticker);
             if (!draft) continue;
@@ -5696,6 +6042,7 @@ async function scanMarket() {
               timeframe,
               candles
             };
+            applyEntryQualityReview(signal, await reviewEntryQuality(candidate));
             rawCandidates.push(candidate);
           }
         }
@@ -5829,14 +6176,41 @@ function updateOpenSignals() {
     if (!ticker) continue;
     const currentPnl = percent(signal.entry, ticker.price, signal.side);
     signal.maxFavorablePnlPct = Math.max(signal.maxFavorablePnlPct ?? 0, currentPnl);
+    signal.profitLockPct = Math.max(signal.profitLockPct ?? 0, profitLockFromPeak(signal));
 
     const hitStop = signal.side === 'LONG' ? ticker.price <= signal.stopLoss : ticker.price >= signal.stopLoss;
     const hitTarget = signal.side === 'LONG' ? ticker.price >= signal.takeProfit : ticker.price <= signal.takeProfit;
+    if (hitTarget) {
+      closeLedgerSignal(signal, 'WIN', signal.takeProfit, 'with profit');
+      continue;
+    }
+
+    const risk = Math.max(signal.riskPct, 0.0001);
+    const breakEvenPrice = breakEvenStopPrice(signal, signal.entry);
+    const breakEvenArmed = (signal.maxFavorablePnlPct ?? 0) >= risk;
+    const hitBreakEven = breakEvenArmed && (signal.side === 'LONG' ? ticker.price <= breakEvenPrice : ticker.price >= breakEvenPrice);
+    if (hitBreakEven) {
+      closeLedgerSignal(signal, 'WIN', breakEvenPrice, 'at breakeven protection');
+      continue;
+    }
+
+    const lockedPnl = signal.profitLockPct ?? 0;
+    if (lockedPnl > 0 && currentPnl <= lockedPnl) {
+      closeLedgerSignal(signal, currentPnl >= 0 ? 'WIN' : 'LOSS', ticker.price, 'by trailing profit lock');
+      continue;
+    }
+
     if (hitStop) {
       closeLedgerSignal(signal, 'LOSS', signal.stopLoss, 'with loss');
       continue;
     }
-    if (hitTarget) closeLedgerSignal(signal, 'WIN', signal.takeProfit, 'with profit');
+
+    const plannedDuration = Math.max(60_000, (signal.plannedExitAt ?? Date.now()) - signal.openedAt);
+    const enoughTimeElapsed = Date.now() - signal.openedAt >= plannedDuration * 0.35;
+    const failedBeforeWorking = enoughTimeElapsed && currentPnl <= -risk * 0.65 && (signal.maxFavorablePnlPct ?? 0) < risk * 0.35;
+    if (failedBeforeWorking) {
+      closeLedgerSignal(signal, 'LOSS', ticker.price, 'setup failure exit');
+    }
   }
 }
 
