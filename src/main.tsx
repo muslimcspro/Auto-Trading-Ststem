@@ -6153,14 +6153,17 @@ function PerformanceChart({
     const marketPrice = signal.status === 'OPEN'
       ? signal.market === 'futures' ? futuresTickers.get(signal.symbol)?.price : tickers.get(signal.symbol)?.price
       : signal.closePrice;
-    const pnl = getSignalPnl(signal, marketPrice);
-    return {
+    const grossPnl = getSignalPnl(signal, marketPrice);
+    const row = {
       ...signal,
       marketPrice,
       label: formatTradeLabel(signal.id),
-      pnl,
-      pnlLabel: formatSignedPct(pnl)
+      pnl: grossPnl,
+      grossPnl,
+      pnlLabel: formatSignedPct(grossPnl)
     };
+    const pnl = getTradeRowNetPnlPct(row);
+    return { ...row, pnl, pnlLabel: formatSignedPct(pnl) };
   }), [ledgerSignals, tickers, futuresTickers]);
   const acceptedBaseRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus !== 'rejected' && row.ledgerPnlEligible !== false), [tradeRows]);
   const rejectedBaseRows = useMemo(() => tradeRows.filter(row => row.ledgerSimulationStatus === 'rejected' || row.ledgerPnlEligible === false), [tradeRows]);
@@ -6180,9 +6183,9 @@ function PerformanceChart({
     spotCount: metricRows.filter(row => row.market === 'spot').length,
     futuresCount: metricRows.filter(row => row.market === 'futures').length
   }), [metricRows]);
-  const metricPnlCards = useMemo(() => summarizeTradeRowPnl(metricRows, ledgerSimulationDraft, ledgerMetricScope === 'accepted' ? 'capital' : 'average'), [metricRows, ledgerSimulationDraft, ledgerMetricScope]);
-  const acceptedLedgerPnlCards = useMemo(() => summarizeTradeRowPnl(acceptedTradeRows, ledgerSimulationDraft, 'capital'), [acceptedTradeRows, ledgerSimulationDraft]);
-  const allStrategyPnlCards = useMemo(() => summarizeTradeRowPnl(allStrategyTradeRows, ledgerSimulationDraft, 'average'), [allStrategyTradeRows, ledgerSimulationDraft]);
+  const metricPnlCards = useMemo(() => summarizeTradeRowPnl(metricRows), [metricRows]);
+  const acceptedLedgerPnlCards = useMemo(() => summarizeTradeRowPnl(acceptedTradeRows), [acceptedTradeRows]);
+  const allStrategyPnlCards = useMemo(() => summarizeTradeRowPnl(allStrategyTradeRows), [allStrategyTradeRows]);
   const ledgerMetricScopeLabel = ledgerMetricScope === 'accepted' ? 'Accepted Simulation' : 'All Strategies';
   const performanceRows = useMemo(() => performanceSignals.map(signal => {
     const marketPrice = tickers.get(signal.symbol)?.price;
@@ -6940,6 +6943,7 @@ function StrategyChartTooltip({ active, payload }: { active?: boolean; payload?:
 type SignalTradeRow = Signal & {
   label: string;
   pnl: number;
+  grossPnl?: number;
   pnlLabel: string;
   marketPrice?: number;
   liquidationPrice?: number | null;
@@ -6952,23 +6956,25 @@ type SignalTradeRow = Signal & {
   venueLabel?: string;
 };
 
+function getTradeRowNotional(row: SignalTradeRow) {
+  return Math.max(0, row.ledgerNotionalUsdt ?? row.ledgerAllocationUsdt ?? row.allocationAmount ?? 0);
+}
+
 function getTradeRowPnlUsdt(row: SignalTradeRow) {
   if (typeof row.pnlUsdt === 'number' && Number.isFinite(row.pnlUsdt)) return row.pnlUsdt;
-  const notional = Math.max(0, row.ledgerNotionalUsdt ?? row.ledgerAllocationUsdt ?? row.allocationAmount ?? 0);
-  const grossPnl = (notional * row.pnl) / 100;
+  const notional = getTradeRowNotional(row);
+  const grossPnl = (notional * (row.grossPnl ?? row.pnl)) / 100;
   const estimatedCosts = Math.max(0, (row.ledgerEstimatedFeeUsdt ?? 0) + (row.ledgerEstimatedSlippageUsdt ?? 0));
   return grossPnl - estimatedCosts;
 }
 
-function pctOfCapital(value: number, capital: number) {
-  return capital > 0 ? (value / capital) * 100 : 0;
+function getTradeRowNetPnlPct(row: SignalTradeRow) {
+  const notional = getTradeRowNotional(row);
+  if (notional <= 0) return row.pnl;
+  return (getTradeRowPnlUsdt(row) / notional) * 100;
 }
 
-function averagePct(total: number, count: number) {
-  return count > 0 ? total / count : 0;
-}
-
-function summarizeTradeRowPnl(rows: SignalTradeRow[], settings?: LedgerSimulationSettings | null, mode: 'capital' | 'average' = 'capital') {
+function summarizeTradeRowPnl(rows: SignalTradeRow[]) {
   const summary = {
     openPnl: 0,
     openUsdt: 0,
@@ -6985,52 +6991,30 @@ function summarizeTradeRowPnl(rows: SignalTradeRow[], settings?: LedgerSimulatio
     futuresUsdt: 0,
     futuresCount: 0
   };
-  const raw = {
-    openPnl: 0,
-    closedPnl: 0,
-    netPnl: 0,
-    spotPnl: 0,
-    futuresPnl: 0
-  };
   for (const row of rows) {
+    const netPnlPct = getTradeRowNetPnlPct(row);
     const pnlUsdt = getTradeRowPnlUsdt(row);
-    raw.netPnl += row.pnl;
+    summary.netPnl += netPnlPct;
     if (row.status === 'OPEN') {
-      raw.openPnl += row.pnl;
+      summary.openPnl += netPnlPct;
       summary.openUsdt += pnlUsdt;
       summary.openCount += 1;
     } else {
-      raw.closedPnl += row.pnl;
+      summary.closedPnl += netPnlPct;
       summary.closedUsdt += pnlUsdt;
       summary.closedCount += 1;
     }
     summary.netUsdt += pnlUsdt;
     if ((row.market ?? 'spot') === 'futures') {
-      raw.futuresPnl += row.pnl;
+      summary.futuresPnl += netPnlPct;
       summary.futuresUsdt += pnlUsdt;
       summary.futuresCount += 1;
     } else {
-      raw.spotPnl += row.pnl;
+      summary.spotPnl += netPnlPct;
       summary.spotUsdt += pnlUsdt;
       summary.spotCount += 1;
     }
   }
-  const totalCapital = Math.max(0, settings?.startingCapitalUsdt ?? ((settings?.spotCapitalUsdt ?? 0) + (settings?.futuresCapitalUsdt ?? 0)));
-  const spotCapital = Math.max(0, settings?.spotCapitalUsdt ?? 0);
-  const futuresCapital = Math.max(0, settings?.futuresCapitalUsdt ?? 0);
-  if (mode === 'average' || totalCapital <= 0) {
-    summary.openPnl = averagePct(raw.openPnl, summary.openCount);
-    summary.closedPnl = averagePct(raw.closedPnl, summary.closedCount);
-    summary.netPnl = averagePct(raw.netPnl, rows.length);
-    summary.spotPnl = averagePct(raw.spotPnl, summary.spotCount);
-    summary.futuresPnl = averagePct(raw.futuresPnl, summary.futuresCount);
-    return summary;
-  }
-  summary.openPnl = pctOfCapital(summary.openUsdt, totalCapital);
-  summary.closedPnl = pctOfCapital(summary.closedUsdt, totalCapital);
-  summary.netPnl = pctOfCapital(summary.netUsdt, totalCapital);
-  summary.spotPnl = pctOfCapital(summary.spotUsdt, spotCapital || totalCapital);
-  summary.futuresPnl = pctOfCapital(summary.futuresUsdt, futuresCapital || totalCapital);
   return summary;
 }
 
